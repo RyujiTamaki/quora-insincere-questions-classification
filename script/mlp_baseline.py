@@ -4,6 +4,10 @@ import os
 import time
 import numpy as np
 import pandas as pd
+from typing import List, Dict
+from operator import itemgetter
+
+
 from keras import backend as K
 from keras.callbacks import Callback
 from keras.callbacks import EarlyStopping
@@ -43,10 +47,6 @@ def timer(name):
 
 def on_field(f: str, *vec) -> Pipeline:
     return make_pipeline(FunctionTransformer(itemgetter(f), validate=False), *vec)
-
-
-def to_records(df: pd.DataFrame) -> List[Dict]:
-    return df.to_dict(orient='records')
 
 
 def get_best_threshold(y_pred_val,
@@ -121,14 +121,14 @@ def build_mlp_model(input_dim):
 def main():
     vectorizer = make_union(
         on_field('question_text', TfidfVectorizer(
-                    max_features=20000,
+                    max_features=30000,
                     analyzer='word',
                     token_pattern='\w+',
                     stop_words='english',
                     ngram_range=(1, 2)
                 )),
         on_field('question_text', TfidfVectorizer(
-                    max_features=20000,
+                    max_features=30000,
                     analyzer='char_wb',
                     token_pattern='\w+',
                     ngram_range=(3, 3)
@@ -139,14 +139,14 @@ def main():
     with timer('load data'):
         train_df = pd.read_csv("../input/train.csv")
         test_df = pd.read_csv('../input/test.csv')
-        X_train = train_df["question_text"].fillna("_na_").values
+        all_text = pd.concat([train_df, test_df])
         y_train = train_df["target"].values
-        X_test = test_df["question_text"].fillna("_na_").values
         qid = test_df["qid"]
 
     with timer('process train'):
-        X_train = vectorizer.fit_transform(X_train + X_test).astype(np.float32)
-        y_train = vectorizer.transform(X_test).astype(np.float32)
+        vectorizer.fit_transform(all_text)
+        X_train = vectorizer.transform(train_df)
+        X_test = vectorizer.transform(test_df)
 
     X_train, X_val, y_train, y_val = train_test_split(
         X_train,
