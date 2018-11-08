@@ -59,6 +59,55 @@ def load_embedding_matrix(word_index,
     return embedding_matrix
 
 
+def sepcnn_model(blocks,
+                 filters,
+                 kernel_size,
+                 dropout_rate,
+                 pool_size,
+                 input_shape,
+                 is_embedding_trainable=False,
+                 embedding_matrix=None):
+    model = Sequential()
+    model.add(Embedding(input_dim=embedding_matrix.shape[0],
+                        output_dim=embedding_matrix.shape[1],
+                        input_length=input_shape[0],
+                        weights=[embedding_matrix],
+                        trainable=is_embedding_trainable))
+
+    for _ in range(blocks-1):
+        model.add(Dropout(rate=dropout_rate))
+        model.add(SeparableConv1D(filters=filters,
+                                  kernel_size=kernel_size,
+                                  activation='relu',
+                                  bias_initializer='random_uniform',
+                                  depthwise_initializer='random_uniform',
+                                  padding='same'))
+        model.add(SeparableConv1D(filters=filters,
+                                  kernel_size=kernel_size,
+                                  activation='relu',
+                                  bias_initializer='random_uniform',
+                                  depthwise_initializer='random_uniform',
+                                  padding='same'))
+        model.add(MaxPooling1D(pool_size=pool_size))
+
+    model.add(SeparableConv1D(filters=filters * 2,
+                              kernel_size=kernel_size,
+                              activation='relu',
+                              bias_initializer='random_uniform',
+                              depthwise_initializer='random_uniform',
+                              padding='same'))
+    model.add(SeparableConv1D(filters=filters * 2,
+                              kernel_size=kernel_size,
+                              activation='relu',
+                              bias_initializer='random_uniform',
+                              depthwise_initializer='random_uniform',
+                              padding='same'))
+    model.add(GlobalAveragePooling1D())
+    model.add(Dropout(rate=dropout_rate))
+    model.add(Dense(1, activation='sigmoid'))
+    return model
+
+
 def bigru_model(hidden_dim,
                 dropout_rate,
                 input_shape,
