@@ -28,7 +28,6 @@ from keras.preprocessing.text import Tokenizer
 from sklearn.metrics import f1_score
 from sklearn.model_selection import train_test_split
 from sklearn.utils import class_weight
-from tqdm import tqdm
 
 
 MAX_FEATURES = 50000
@@ -49,7 +48,7 @@ def load_embedding_matrix(word_index,
     with timer('load embeddings'):
         embeddings_index = {}
         f = open(embedding_path)
-        for line in tqdm(f):
+        for line in f:
             values = line.split(" ")
             word = values[0]
             coefs = np.asarray(values[1:], dtype='float32')
@@ -129,6 +128,34 @@ def bigru_model(hidden_dim,
     return model
 
 
+def bigru_cnn_model(hidden_dim=64,
+                    dropout_rate=0.1,
+                    filters=100,
+                    filter_sizes=[1, 2, 3, 4],
+                    input_shape=None,
+                    is_embedding_trainable=False,
+                    embedding_matrix=None):
+
+    inp = Input(shape=(input_shape[0],))
+    x = Embedding(input_dim=embedding_matrix.shape[0],
+                  output_dim=embedding_matrix.shape[1],
+                  input_length=input_shape[0],
+                  weights=[embedding_matrix],
+                  trainable=is_embedding_trainable)(inp)
+    x = Bidirectional(CuDNNGRU(hidden_dim, return_sequences=True))(x)
+    x = Reshape((1, MAX_SEQUENCE_LENGTH, hidden_dim * 2))(x)
+    conv = Conv2D(filters, kernel_size=(3, 3),
+                  kernel_initializer='normal', activation='elu',
+                  data_format='channels_first')(x)
+    maxpool = MaxPool2D(pool_size=(3, 3))(conv)
+    z = Flatten()(maxpool)
+    z = Dropout(dropout_rate)(z)
+
+    outp = Dense(1, activation="sigmoid")(z)
+    model = Model(inputs=inp, outputs=outp)
+    return model
+
+
 def get_best_threshold(y_pred_val,
                        y_val):
     threshold_dict = {}
@@ -150,7 +177,7 @@ def fit_predict(X_train,
                 y_val,
                 X_test,
                 model,
-                batch_size=256):
+                batch_size=1024):
     with timer('fitting'):
         early_stopping = EarlyStopping(monitor='val_loss', patience=2)
         model_checkpoint = ModelCheckpoint(
@@ -175,7 +202,8 @@ def fit_predict(X_train,
             epochs=1000,
             batch_size=batch_size,
             class_weight=class_weights,
-            callbacks=[early_stopping, model_checkpoint]
+            callbacks=[early_stopping, model_checkpoint],
+            verbose=2
         )
 
     model.load_weights('best.h5')
@@ -236,7 +264,7 @@ def main():
         y_val=y_val,
         X_test=X_test,
         model=gru_glove,
-        batch_size=256
+        batch_size=1024
     )
 
     cnn_glove = cnn_model(
@@ -252,7 +280,23 @@ def main():
         y_val=y_val,
         X_test=X_test,
         model=cnn_glove,
-        batch_size=256
+        batch_size=1024
+    )
+
+    bigru_cnn_glove = bigru_cnn_model(
+        input_shape=X_train.shape[1:],
+        is_embedding_trainable=False,
+        embedding_matrix=glove_embedding
+    )
+
+    gru_cnn_glove_pred_test, gru_cnn_glove_pred_val = fit_predict(
+        X_train=X_train,
+        X_val=X_val,
+        y_train=y_train,
+        y_val=y_val,
+        X_test=X_test,
+        model=bigru_cnn_glove,
+        batch_size=1024
     )
 
     del glove_embedding
@@ -278,7 +322,7 @@ def main():
         y_val=y_val,
         X_test=X_test,
         model=gru_fast_text,
-        batch_size=256
+        batch_size=1024
     )
 
     cnn_fast_text = cnn_model(
@@ -294,7 +338,23 @@ def main():
         y_val=y_val,
         X_test=X_test,
         model=cnn_fast_text,
-        batch_size=256
+        batch_size=1024
+    )
+
+    bigru_cnn_fast_text = bigru_cnn_model(
+        input_shape=X_train.shape[1:],
+        is_embedding_trainable=False,
+        embedding_matrix=fast_text_embedding
+    )
+
+    gru_cnn_fast_text_pred_test, gru_cnn_fast_text_pred_val = fit_predict(
+        X_train=X_train,
+        X_val=X_val,
+        y_train=y_train,
+        y_val=y_val,
+        X_test=X_test,
+        model=bigru_cnn_fast_text,
+        batch_size=1024
     )
 
     del fast_text_embedding
@@ -302,12 +362,16 @@ def main():
 
     gru_pred_val = (gru_glove_pred_val + gru_fast_text_pred_val) / 2
     cnn_pred_val = (cnn_glove_pred_val + cnn_fast_text_pred_val) / 2
+    gru_cnn_pred_val = (gru_cnn_glove_pred_val +
+                        gru_cnn_fast_text_pred_val) / 2
 
     gru_pred_test = (gru_glove_pred_test + gru_fast_text_pred_test) / 2
     cnn_pred_test = (cnn_glove_pred_test + cnn_fast_text_pred_test) / 2
+    gru_cnn_pred_test = (gru_cnn_glove_pred_test +
+                         gru_cnn_fast_text_pred_test) / 2
 
-    y_pred_val = 0.6 * gru_pred_val + 0.4 * cnn_pred_val
-    y_pred_test = 0.6 * gru_pred_test + 0.4 * cnn_pred_test
+    y_pred_val = 0.4 * gru_pred_val + 0.2 * cnn_pred_val + 0.4 * gru_cnn_pred_val
+    y_pred_test = 0.4 * gru_pred_test + 0.2 * cnn_pred_test + 0.4 * gru_cnn_pred_test
 
     threshold = get_best_threshold(y_pred_val, y_val)
     y_pred = (np.array(y_pred_test) > threshold).astype(np.int)

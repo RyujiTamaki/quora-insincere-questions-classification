@@ -89,7 +89,7 @@ def get_best_threshold(y_pred_val,
         print("F1 score at threshold {0} is {1}".format(
             thresh, threshold_dict[thresh]))
 
-    best_threshold = max(threshold_dict)
+    best_threshold = max(threshold_dict, key=threshold_dict.get)
     print("best threshold: {}".format(best_threshold))
     return best_threshold
 
@@ -120,7 +120,7 @@ def fit_predict(X_train,
             y_train,
             validation_data=(X_val, y_val),
             epochs=2,
-            batch_size=256,
+            batch_size=512,
             class_weight=class_weights
         )
 
@@ -155,7 +155,7 @@ def main():
         X_train = pad_sequences(X_train, maxlen=MAX_SEQUENCE_LENGTH)
         X_test = pad_sequences(X_test, maxlen=MAX_SEQUENCE_LENGTH)
 
-    embedding_matrix = load_embedding_matrix(
+    glove_embedding = load_embedding_matrix(
         word_index=word_index,
         embedding_path=GLOVE_PATH
     )
@@ -165,7 +165,7 @@ def main():
         dropout_rate=0.2,
         input_shape=X_train.shape[1:],
         is_embedding_trainable=False,
-        embedding_matrix=embedding_matrix
+        embedding_matrix=glove_embedding
     )
 
     y_pred = fit_predict(
