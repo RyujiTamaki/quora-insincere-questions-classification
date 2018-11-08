@@ -121,14 +121,14 @@ def build_mlp_model(input_dim):
 def main():
     vectorizer = make_union(
         on_field('question_text', TfidfVectorizer(
-                    max_features=30000,
+                    max_features=100000,
                     analyzer='word',
                     token_pattern='\w+',
                     stop_words='english',
                     ngram_range=(1, 2)
                 )),
         on_field('question_text', TfidfVectorizer(
-                    max_features=30000,
+                    max_features=100000,
                     analyzer='char_wb',
                     token_pattern='\w+',
                     ngram_range=(3, 3)
