@@ -164,7 +164,7 @@ def main():
         y_val=y_val,
         X_test=X_test,
         model=mlp_model,
-        batch_size=512
+        batch_size=2048
     )
 
     threshold = get_best_threshold(mlp_pred_val, y_val)
