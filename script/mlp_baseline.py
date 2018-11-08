@@ -1,21 +1,37 @@
-import os; os.environ['OMP_NUM_THREADS'] = '1'
 from contextlib import contextmanager
-from functools import partial
-from operator import itemgetter
-from multiprocessing.pool import ThreadPool
+import gc
+import os
 import time
-from typing import List, Dict
-
-import pandas as pd
 import numpy as np
-import tensorflow as tf
+import pandas as pd
+from keras import backend as K
+from keras.callbacks import Callback
+from keras.callbacks import EarlyStopping
+from keras.callbacks import ModelCheckpoint
+from keras.layers import Bidirectional
+from keras.layers import Concatenate
+from keras.layers import Conv2D
+from keras.layers import CuDNNGRU
+from keras.layers import Dense
+from keras.layers import Dropout
+from keras.layers import Embedding
+from keras.layers import GlobalMaxPool1D
+from keras.layers import Flatten
+from keras.layers import Input
+from keras.layers import MaxPool2D
+from keras.layers import MaxPooling1D
+from keras.layers import SpatialDropout1D
+from keras.layers import Reshape
+from keras.models import Model
+from keras.preprocessing.sequence import pad_sequences
+from keras.preprocessing.text import Tokenizer
+from sklearn.metrics import f1_score
+from sklearn.model_selection import train_test_split
+from sklearn.utils import class_weight
 from sklearn.feature_extraction import DictVectorizer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.pipeline import make_pipeline, make_union, Pipeline
 from sklearn.preprocessing import FunctionTransformer
-from sklearn.model_selection import KFold
-from sklearn.metrics import f1_score
-from sklearn.utils import class_weight
 
 
 @contextmanager
@@ -33,15 +49,72 @@ def to_records(df: pd.DataFrame) -> List[Dict]:
     return df.to_dict(orient='records')
 
 
+def get_best_threshold(y_pred_val,
+                       y_val):
+    threshold_dict = {}
+    for thresh in np.arange(0.1, 0.501, 0.01):
+        thresh = np.round(thresh, 2)
+        threshold_dict[thresh] = f1_score(
+            y_val, (y_pred_val > thresh).astype(int)
+        )
+
+    best_threshold = max(threshold_dict, key=threshold_dict.get)
+    print("best threshold: {}".format(best_threshold))
+    print("best f1 score: {}".format(threshold_dict[best_threshold]))
+    return best_threshold
+
+
+def fit_predict(X_train,
+                X_val,
+                y_train,
+                y_val,
+                X_test,
+                model,
+                batch_size=32):
+    with timer('fitting'):
+        early_stopping = EarlyStopping(monitor='val_loss', patience=1)
+        model_checkpoint = ModelCheckpoint(
+            'best.h5',
+            save_best_only=True,
+            save_weights_only=True
+        )
+        class_weights = class_weight.compute_class_weight(
+            'balanced',
+            np.unique(y_train),
+            y_train
+        )
+        model.compile(
+            loss='binary_crossentropy',
+            optimizer='adam'
+        )
+
+        model.fit(
+            X_train,
+            y_train,
+            validation_data=(X_val, y_val),
+            epochs=1000,
+            batch_size=batch_size,
+            class_weight=class_weights,
+            callbacks=[early_stopping, model_checkpoint]
+        )
+
+    model.load_weights('best.h5')
+    y_pred_val = model.predict(X_val, batch_size=2048)[:, 0]
+
+    with timer('predicting'):
+        y_pred = model.predict(X_test, batch_size=2048)[:, 0]
+
+    get_best_threshold(y_pred_val, y_val)
+    return y_pred, y_pred_val
+
+
 def build_mlp_model(input_dim):
-    model_in = tf.keras.Input(shape=(input_dim,), dtype='float32', sparse=True)
-    out = tf.keras.layers.Dense(128, input_shape=(input_dim, ), activation='relu')(model_in)
-    out = tf.keras.layers.Dense(64, activation='relu')(out)
-    out = tf.keras.layers.Dense(32, activation='relu')(out)
-    out = tf.keras.layers.Dense(1, activation='sigmoid')(out)
-    model = tf.keras.Model(model_in, out)
-    model.compile(loss='binary_crossentropy',
-                  optimizer=tf.keras.optimizers.Adam(lr=3e-3))
+    model_in = Input(shape=(input_dim,), dtype='float32', sparse=True)
+    out = Dense(128, activation='relu')(model_in)
+    out = Dense(64, activation='relu')(out)
+    out = Dense(32, activation='relu')(out)
+    out = Dense(1, activation='sigmoid')(out)
+    model = Model(model_in, out)
     return model
 
 
@@ -56,7 +129,7 @@ def main():
                 )),
         on_field('question_text', TfidfVectorizer(
                     max_features=20000,
-                    analyzer='char',
+                    analyzer='char_wb',
                     token_pattern='\w+',
                     ngram_range=(3, 3)
                 )),
@@ -64,60 +137,44 @@ def main():
     )
 
     with timer('load data'):
-        train = pd.read_csv("../input/train.csv")
-        test = pd.read_csv('../input/test.csv')
+        train_df = pd.read_csv("../input/train.csv")
+        test_df = pd.read_csv('../input/test.csv')
+        X_train = train_df["question_text"].fillna("_na_").values
+        y_train = train_df["target"].values
+        X_test = test_df["question_text"].fillna("_na_").values
+        qid = test_df["qid"]
 
     with timer('process train'):
-        cv = KFold(n_splits=20, shuffle=True, random_state=42)
-        train_ids, valid_ids = next(cv.split(train))
-        train, valid = train.iloc[train_ids], train.iloc[valid_ids]
-        y_train = train.target.values
-        y_valid = valid.target.values
-        X_train = vectorizer.fit_transform(train).astype(np.float32)
-        print(f'X_train: {X_train.shape} of {X_train.dtype}')
-        class_weights = class_weight.compute_class_weight(
-            'balanced',
-            np.unique(train.target.values),
-            train.target.values
-        )
-        del train
+        X_train = vectorizer.fit_transform(X_train + X_test).astype(np.float32)
+        y_train = vectorizer.transform(X_test).astype(np.float32)
 
-    with timer('process valid'):
-        X_valid = vectorizer.transform(valid).astype(np.float32)
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_train,
+        y_train,
+        test_size=0.1,
+        random_state=39
+    )
 
-    with timer('process test'):
-        X_test = vectorizer.transform(test).astype(np.float32)
+    mlp_model = build_mlp_model(input_dim=X_train.shape[1])
 
-    with timer('fitting'):
-        early_stopping = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=2)
-        model_checkpoint = tf.keras.callbacks.ModelCheckpoint('mlp.h5', save_best_only=True, save_weights_only=True)
-        model = build_mlp_model(input_dim=X_train.shape[1])
-        model.fit(
-            X_train, y_train,
-            batch_size=32,
-            epochs=100,
-            validation_data=[X_valid, y_valid],
-            callbacks=[early_stopping, model_checkpoint],
-            class_weight=class_weights,
-            verbose=True
-        )
+    mlp_pred_test, mlp_pred_val = fit_predict(
+        X_train=X_train,
+        X_val=X_val,
+        y_train=y_train,
+        y_val=y_val,
+        X_test=X_test,
+        model=mlp_model,
+        batch_size=512
+    )
 
-        json_string = model.to_json()
-        del model
-        model = tf.keras.models.model_from_json(json_string)
-        model.load_weights('mlp.h5')
-        y_pred_val = model.predict(X_valid, batch_size=8192)[:, 0]
-        y_pred_val_bin = (np.array(y_pred_val) > 0.5).astype(np.int)
-        val_score = f1_score(y_pred=y_pred_bin, y_true=valid.target.values)
-        print(f"f1 score: {val_score}")
+    threshold = get_best_threshold(mlp_pred_val, y_val)
+    y_pred = (np.array(mlp_pred_test) > threshold).astype(np.int)
 
-    with timer('predicting'):
-        y_pred_test = model.predict(X_test, batch_size=8192)[:, 0]
-        y_pred_test_bin = (np.array(y_pred_test) > 0.5).astype(np.int)
-        submit_df = pd.DataFrame({
-            "qid": test["qid"], "prediction": y_pred_test_bin
-        })
-        submit_df.to_csv(f"f1_{val_score}.csv", index=False)
+    submit_df = pd.DataFrame({"qid": qid, "prediction": y_pred})
+    submit_df.to_csv(
+        "submission.csv",
+        index=False
+    )
 
 
 if __name__ == '__main__':
