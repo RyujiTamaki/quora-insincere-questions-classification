@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+import gc
 import os
 import time
 import numpy as np
@@ -8,12 +9,20 @@ from keras.callbacks import Callback
 from keras.callbacks import EarlyStopping
 from keras.callbacks import ModelCheckpoint
 from keras.layers import Bidirectional
+from keras.layers import Concatenate
+from keras.layers import Conv2D
 from keras.layers import CuDNNGRU
 from keras.layers import Dense
 from keras.layers import Dropout
 from keras.layers import Embedding
 from keras.layers import GlobalMaxPool1D
-from keras.models import Sequential
+from keras.layers import Flatten
+from keras.layers import Input
+from keras.layers import MaxPool2D
+from keras.layers import MaxPooling1D
+from keras.layers import SpatialDropout1D
+from keras.layers import Reshape
+from keras.models import Model
 from keras.preprocessing.sequence import pad_sequences
 from keras.preprocessing.text import Tokenizer
 from sklearn.metrics import f1_score
@@ -22,8 +31,8 @@ from sklearn.utils import class_weight
 from tqdm import tqdm
 
 
-TOP_K = 30000
-MAX_SEQUENCE_LENGTH = 50
+MAX_FEATURES = 50000
+MAX_SEQUENCE_LENGTH = 100
 EMBEDDING_DIM = 300
 GLOVE_PATH = '../input/embeddings/glove.840B.300d/glove.840B.300d.txt'
 FAST_TEXT_PATH = '../input/embeddings/wiki-news-300d-1M/wiki-news-300d-1M.vec'
@@ -59,52 +68,43 @@ def load_embedding_matrix(word_index,
     return embedding_matrix
 
 
-def sepcnn_model(blocks,
-                 filters,
-                 kernel_size,
-                 dropout_rate,
-                 pool_size,
-                 input_shape,
-                 is_embedding_trainable=False,
-                 embedding_matrix=None):
-    model = Sequential()
-    model.add(Embedding(input_dim=embedding_matrix.shape[0],
-                        output_dim=embedding_matrix.shape[1],
-                        input_length=input_shape[0],
-                        weights=[embedding_matrix],
-                        trainable=is_embedding_trainable))
+def cnn_model(filters=64,
+              filter_sizes=[1, 2, 3, 4],
+              dropout_rate=0.1,
+              input_shape=None,
+              is_embedding_trainable=False,
+              embedding_matrix=None):
 
-    for _ in range(blocks-1):
-        model.add(Dropout(rate=dropout_rate))
-        model.add(SeparableConv1D(filters=filters,
-                                  kernel_size=kernel_size,
-                                  activation='relu',
-                                  bias_initializer='random_uniform',
-                                  depthwise_initializer='random_uniform',
-                                  padding='same'))
-        model.add(SeparableConv1D(filters=filters,
-                                  kernel_size=kernel_size,
-                                  activation='relu',
-                                  bias_initializer='random_uniform',
-                                  depthwise_initializer='random_uniform',
-                                  padding='same'))
-        model.add(MaxPooling1D(pool_size=pool_size))
+    maxlen = input_shape[0]
+    inp = Input(shape=(maxlen,))
+    x = Embedding(input_dim=embedding_matrix.shape[0],
+                  output_dim=embedding_matrix.shape[1],
+                  input_length=maxlen,
+                  weights=[embedding_matrix],
+                  trainable=is_embedding_trainable)(inp)
+    x = SpatialDropout1D(0.4)(x)
+    x = Reshape((maxlen, EMBEDDING_DIM, 1))(x)
 
-    model.add(SeparableConv1D(filters=filters * 2,
-                              kernel_size=kernel_size,
-                              activation='relu',
-                              bias_initializer='random_uniform',
-                              depthwise_initializer='random_uniform',
-                              padding='same'))
-    model.add(SeparableConv1D(filters=filters * 2,
-                              kernel_size=kernel_size,
-                              activation='relu',
-                              bias_initializer='random_uniform',
-                              depthwise_initializer='random_uniform',
-                              padding='same'))
-    model.add(GlobalAveragePooling1D())
-    model.add(Dropout(rate=dropout_rate))
-    model.add(Dense(1, activation='sigmoid'))
+    conv_0 = Conv2D(filters, kernel_size=(filter_sizes[0], EMBEDDING_DIM),
+                    kernel_initializer='normal', activation='elu')(x)
+    conv_1 = Conv2D(filters, kernel_size=(filter_sizes[1], EMBEDDING_DIM),
+                    kernel_initializer='normal', activation='elu')(x)
+    conv_2 = Conv2D(filters, kernel_size=(filter_sizes[2], EMBEDDING_DIM),
+                    kernel_initializer='normal', activation='elu')(x)
+    conv_3 = Conv2D(filters, kernel_size=(filter_sizes[3], EMBEDDING_DIM),
+                    kernel_initializer='normal', activation='elu')(x)
+
+    maxpool_0 = MaxPool2D(pool_size=(maxlen - filter_sizes[0] + 1, 1))(conv_0)
+    maxpool_1 = MaxPool2D(pool_size=(maxlen - filter_sizes[1] + 1, 1))(conv_1)
+    maxpool_2 = MaxPool2D(pool_size=(maxlen - filter_sizes[2] + 1, 1))(conv_2)
+    maxpool_3 = MaxPool2D(pool_size=(maxlen - filter_sizes[3] + 1, 1))(conv_3)
+
+    z = Concatenate(axis=1)([maxpool_0, maxpool_1, maxpool_2, maxpool_3])
+    z = Flatten()(z)
+    z = Dropout(dropout_rate)(z)
+
+    outp = Dense(1, activation="sigmoid")(z)
+    model = Model(inputs=inp, outputs=outp)
     return model
 
 
@@ -113,18 +113,19 @@ def bigru_model(hidden_dim,
                 input_shape,
                 is_embedding_trainable=False,
                 embedding_matrix=None):
-    model = Sequential()
-    model.add(Embedding(input_dim=embedding_matrix.shape[0],
-                        output_dim=embedding_matrix.shape[1],
-                        input_length=input_shape[0],
-                        weights=[embedding_matrix],
-                        trainable=is_embedding_trainable))
 
-    model.add(Bidirectional(CuDNNGRU(hidden_dim, return_sequences=True)))
-    model.add(GlobalMaxPool1D())
-    model.add(Dense(16, activation='relu'))
-    model.add(Dropout(rate=dropout_rate))
-    model.add(Dense(1, activation='sigmoid'))
+    inp = Input(shape=(input_shape[0],))
+    x = Embedding(input_dim=embedding_matrix.shape[0],
+                  output_dim=embedding_matrix.shape[1],
+                  input_length=input_shape[0],
+                  weights=[embedding_matrix],
+                  trainable=is_embedding_trainable)(inp)
+    x = Bidirectional(CuDNNGRU(64, return_sequences=True))(x)
+    x = GlobalMaxPool1D()(x)
+    x = Dense(16, activation="relu")(x)
+    x = Dropout(0.1)(x)
+    x = Dense(1, activation="sigmoid")(x)
+    model = Model(inputs=inp, outputs=x)
     return model
 
 
@@ -134,25 +135,28 @@ def get_best_threshold(y_pred_val,
     for thresh in np.arange(0.1, 0.501, 0.01):
         thresh = np.round(thresh, 2)
         threshold_dict[thresh] = f1_score(
-            y_val, (y_pred_val > thresh).astype(int))
-        print("F1 score at threshold {0} is {1}".format(
-            thresh, threshold_dict[thresh]))
+            y_val, (y_pred_val > thresh).astype(int)
+        )
 
-    best_threshold = max(threshold_dict)
+    best_threshold = max(threshold_dict, key=threshold_dict.get)
     print("best threshold: {}".format(best_threshold))
+    print("best f1 score: {}".format(threshold_dict[best_threshold]))
     return best_threshold
 
 
 def fit_predict(X_train,
+                X_val,
                 y_train,
+                y_val,
                 X_test,
-                model):
+                model,
+                batch_size=256):
     with timer('fitting'):
-        X_train, X_val, y_train, y_val = train_test_split(
-            X_train,
-            y_train,
-            test_size=0.1,
-            random_state=39
+        early_stopping = EarlyStopping(monitor='val_loss', patience=2)
+        model_checkpoint = ModelCheckpoint(
+            'best.h5',
+            save_best_only=True,
+            save_weights_only=True
         )
         class_weights = class_weight.compute_class_weight(
             'balanced',
@@ -168,19 +172,20 @@ def fit_predict(X_train,
             X_train,
             y_train,
             validation_data=(X_val, y_val),
-            epochs=2,
-            batch_size=256,
-            class_weight=class_weights
+            epochs=1000,
+            batch_size=batch_size,
+            class_weight=class_weights,
+            callbacks=[early_stopping, model_checkpoint]
         )
 
+    model.load_weights('best.h5')
     y_pred_val = model.predict(X_val, batch_size=2048)[:, 0]
-    threshold = get_best_threshold(y_pred_val, y_val)
 
     with timer('predicting'):
         y_pred = model.predict(X_test, batch_size=2048)[:, 0]
-        y_pred = (np.array(y_pred) > threshold).astype(np.int)
 
-    return y_pred
+    get_best_threshold(y_pred_val, y_val)
+    return y_pred, y_pred_val
 
 
 def main():
@@ -193,7 +198,7 @@ def main():
         qid = test_df["qid"]
 
     with timer('preprocess'):
-        tokenizer = Tokenizer(num_words=TOP_K)
+        tokenizer = Tokenizer(num_words=MAX_FEATURES)
         tokenizer.fit_on_texts(np.hstack((
             train_df.question_text.values, test_df.question_text.values))
         )
@@ -204,25 +209,108 @@ def main():
         X_train = pad_sequences(X_train, maxlen=MAX_SEQUENCE_LENGTH)
         X_test = pad_sequences(X_test, maxlen=MAX_SEQUENCE_LENGTH)
 
-    embedding_matrix = load_embedding_matrix(
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_train,
+        y_train,
+        test_size=0.1,
+        random_state=39
+    )
+
+    glove_embedding = load_embedding_matrix(
         word_index=word_index,
         embedding_path=GLOVE_PATH
     )
 
     gru_glove = bigru_model(
         hidden_dim=64,
-        dropout_rate=0.2,
+        dropout_rate=0.1,
         input_shape=X_train.shape[1:],
         is_embedding_trainable=False,
-        embedding_matrix=embedding_matrix
+        embedding_matrix=glove_embedding
     )
 
-    y_pred = fit_predict(
+    gru_glove_pred_test, gru_glove_pred_val = fit_predict(
         X_train=X_train,
+        X_val=X_val,
         y_train=y_train,
+        y_val=y_val,
         X_test=X_test,
-        model=gru_glove
+        model=gru_glove,
+        batch_size=256
     )
+
+    cnn_glove = cnn_model(
+        input_shape=X_train.shape[1:],
+        is_embedding_trainable=False,
+        embedding_matrix=glove_embedding
+    )
+
+    cnn_glove_pred_test, cnn_glove_pred_val = fit_predict(
+        X_train=X_train,
+        X_val=X_val,
+        y_train=y_train,
+        y_val=y_val,
+        X_test=X_test,
+        model=cnn_glove,
+        batch_size=256
+    )
+
+    del glove_embedding
+    gc.collect()
+
+    fast_text_embedding = load_embedding_matrix(
+        word_index=word_index,
+        embedding_path=FAST_TEXT_PATH
+    )
+
+    gru_fast_text = bigru_model(
+        hidden_dim=64,
+        dropout_rate=0.1,
+        input_shape=X_train.shape[1:],
+        is_embedding_trainable=False,
+        embedding_matrix=fast_text_embedding
+    )
+
+    gru_fast_text_pred_test, gru_fast_text_pred_val = fit_predict(
+        X_train=X_train,
+        X_val=X_val,
+        y_train=y_train,
+        y_val=y_val,
+        X_test=X_test,
+        model=gru_fast_text,
+        batch_size=256
+    )
+
+    cnn_fast_text = cnn_model(
+        input_shape=X_train.shape[1:],
+        is_embedding_trainable=False,
+        embedding_matrix=fast_text_embedding
+    )
+
+    cnn_fast_text_pred_test, cnn_fast_text_pred_val = fit_predict(
+        X_train=X_train,
+        X_val=X_val,
+        y_train=y_train,
+        y_val=y_val,
+        X_test=X_test,
+        model=cnn_fast_text,
+        batch_size=256
+    )
+
+    del fast_text_embedding
+    gc.collect()
+
+    gru_pred_val = (gru_glove_pred_val + gru_fast_text_pred_val) / 2
+    cnn_pred_val = (cnn_glove_pred_val + cnn_fast_text_pred_val) / 2
+
+    gru_pred_test = (gru_glove_pred_test + gru_fast_text_pred_test) / 2
+    cnn_pred_test = (cnn_glove_pred_test + cnn_fast_text_pred_test) / 2
+
+    y_pred_val = 0.6 * gru_pred_val + 0.4 * cnn_pred_val
+    y_pred_test = 0.6 * gru_pred_test + 0.4 * cnn_pred_test
+
+    threshold = get_best_threshold(y_pred_val, y_val)
+    y_pred = (np.array(y_pred_test) > threshold).astype(np.int)
 
     submit_df = pd.DataFrame({"qid": qid, "prediction": y_pred})
     submit_df.to_csv(
