@@ -106,8 +106,12 @@ def bigru_attn_model(hidden_dim,
     a = Dense(8, activation="sigmoid")(a)
     # (8, hidden * 2)
     m = dot([a, h], axes=(1, 1))
-    m = Flatten()(m)
-    x = Dropout(dropout_rate)(m)
+    # (8 * hidden * 2)
+    x = Flatten()(m)
+    x = Dense(8 * hidden_dim * 2, activation="relu")(x)
+    x = Dropout(dropout_rate)(x)
+    x = Dense(8 * hidden_dim * 2, activation="relu")(x)
+    x = Dropout(dropout_rate)(x)
     x = Dense(1, activation="sigmoid")(x)
     model = Model(inputs=inp, outputs=x)
     model.summary()
@@ -161,7 +165,7 @@ def fit_predict(X_train,
             batch_size=batch_size,
             class_weight=class_weights,
             callbacks=[early_stopping, model_checkpoint],
-            verbose=2
+            verbose=1
         )
 
     model.load_weights('best.h5')
@@ -210,7 +214,7 @@ def main():
         hidden_dim=64,
         dropout_rate=0.1,
         input_shape=X_train.shape[1:],
-        is_embedding_trainable=True,
+        is_embedding_trainable=False,
         embedding_matrix=glove_embedding
     )
 
@@ -227,9 +231,9 @@ def main():
 
     attn_glove = bigru_attn_model(
         hidden_dim=64,
-        dropout_rate=0.1,
+        dropout_rate=0.5,
         input_shape=X_train.shape[1:],
-        is_embedding_trainable=True,
+        is_embedding_trainable=False,
         embedding_matrix=glove_embedding
     )
 
@@ -256,7 +260,7 @@ def main():
         hidden_dim=64,
         dropout_rate=0.1,
         input_shape=X_train.shape[1:],
-        is_embedding_trainable=True,
+        is_embedding_trainable=False,
         embedding_matrix=fast_text_embedding
     )
 
@@ -274,7 +278,7 @@ def main():
         hidden_dim=64,
         dropout_rate=0.1,
         input_shape=X_train.shape[1:],
-        is_embedding_trainable=True,
+        is_embedding_trainable=False,
         embedding_matrix=fast_text_embedding
     )
 
