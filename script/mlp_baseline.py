@@ -33,7 +33,7 @@ from sklearn.metrics import f1_score
 from sklearn.model_selection import train_test_split
 from sklearn.utils import class_weight
 from sklearn.feature_extraction import DictVectorizer
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.pipeline import make_pipeline, make_union, Pipeline
 from sklearn.preprocessing import FunctionTransformer
 
@@ -108,11 +108,14 @@ def fit_predict(X_train,
     return y_pred, y_pred_val
 
 
-def build_mlp_model(input_dim):
+def build_mlp_model(input_dim, dropout_rate=0.3):
     model_in = Input(shape=(input_dim,), dtype='float32', sparse=True)
-    out = Dense(128, activation='relu')(model_in)
-    out = Dense(64, activation='relu')(out)
-    out = Dense(32, activation='relu')(out)
+    out = Dense(1024, activation='relu')(model_in)
+    out = Dropout(dropout_rate)(out)
+    out = Dense(512, activation='relu')(out)
+    out = Dropout(dropout_rate)(out)
+    out = Dense(128, activation='relu')(out)
+    out = Dropout(dropout_rate)(out)
     out = Dense(1, activation='sigmoid')(out)
     model = Model(model_in, out)
     return model
@@ -127,7 +130,7 @@ def main():
                     stop_words='english',
                     ngram_range=(1, 2)
                 )),
-        on_field('question_text', TfidfVectorizer(
+        on_field('question_text', CountVectorizer(
                     max_features=100000,
                     analyzer='char_wb',
                     token_pattern='\w+',
@@ -164,7 +167,7 @@ def main():
         y_val=y_val,
         X_test=X_test,
         model=mlp_model,
-        batch_size=2048
+        batch_size=512
     )
 
     threshold = get_best_threshold(mlp_pred_val, y_val)

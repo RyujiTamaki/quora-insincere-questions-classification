@@ -178,15 +178,14 @@ def main():
             y_train,
             validation_data=(X_val, y_val),
             epochs=1000,
-            batch_size=256,
+            batch_size=128,
             class_weight=class_weights,
             callbacks=[early_stopping, model_checkpoint, f1_Score]
         )
 
     with timer('predicting'):
-        best_val_loss = min(hist.history['val_loss'])
-        y_pred = model.predict(X_test, batch_size=1024)
-        y_pred = (y_pred > 0.5).astype(int)
+        y_pred = model.predict(X_test, batch_size=1024)[:, 0]
+        y_pred = (np.array(y_pred) > 0.5).astype(np.int)
 
         submit_df = pd.DataFrame({"qid": test_df["qid"], "prediction": y_pred})
         submit_df.to_csv(
