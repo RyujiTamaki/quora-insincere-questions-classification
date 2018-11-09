@@ -4,6 +4,7 @@ import os
 import time
 import numpy as np
 import pandas as pd
+import joblib
 from keras import backend as K
 from keras import regularizers
 from keras.callbacks import Callback
@@ -39,30 +40,6 @@ def timer(name):
     t0 = time.time()
     yield
     print(f'[{name}] done in {time.time() - t0:.0f} s')
-
-
-def load_embedding_matrix(word_index,
-                          embedding_path=None):
-    with timer('load embeddings'):
-        embeddings_index = {}
-        f = open(embedding_path)
-        for line in f:
-            values = line.split(" ")
-            word = values[0]
-            coefs = np.asarray(values[1:], dtype='float32')
-            embeddings_index[word] = coefs
-        f.close()
-
-        print('Found %s word vectors.' % len(embeddings_index))
-
-    with timer('calculate embedding matrix'):
-        embedding_matrix = np.zeros((len(word_index) + 1, EMBEDDING_DIM))
-        for word, i in word_index.items():
-            embedding_vector = embeddings_index.get(word)
-            if embedding_vector is not None:
-                embedding_matrix[i] = embedding_vector
-
-    return embedding_matrix
 
 
 def bigru_model(hidden_dim,
@@ -181,34 +158,19 @@ def fit_predict(X_train,
 
 def main():
     with timer('load data'):
-        train_df = pd.read_csv("../input/train.csv")
         test_df = pd.read_csv('../input/test.csv')
-        X_train = train_df["question_text"].fillna("_na_").values
-        y_train = train_df["target"].values
-        X_test = test_df["question_text"].fillna("_na_").values
+        X_train = joblib.load('../input/X_train.joblib')
+        y_train = joblib.load('../input/y_train.joblib')
+        X_test = joblib.load('../input/X_test.joblib')
+        glove_embedding = joblib.load('../input/glove_embedding.joblib')
+        test_df = pd.read_csv('../input/test.csv')
         qid = test_df["qid"]
-
-    with timer('preprocess'):
-        tokenizer = Tokenizer(num_words=MAX_FEATURES)
-        tokenizer.fit_on_texts(np.hstack((
-            train_df.question_text.values, test_df.question_text.values))
-        )
-        X_train = tokenizer.texts_to_sequences(train_df.question_text.values)
-        X_test = tokenizer.texts_to_sequences(test_df.question_text.values)
-        word_index = tokenizer.word_index
-
-        X_train = pad_sequences(X_train, maxlen=MAX_SEQUENCE_LENGTH)
-        X_test = pad_sequences(X_test, maxlen=MAX_SEQUENCE_LENGTH)
 
     X_train, X_val, y_train, y_val = train_test_split(
         X_train,
         y_train,
         test_size=0.1,
         random_state=39
-    )
-    glove_embedding = load_embedding_matrix(
-        word_index=word_index,
-        embedding_path=GLOVE_PATH
     )
 
     attn_glove = bigru_attn_model(
