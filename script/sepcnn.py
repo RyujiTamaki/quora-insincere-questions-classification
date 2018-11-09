@@ -3,6 +3,7 @@ import os
 import time
 import numpy as np
 import pandas as pd
+import joblib
 from keras import backend as K
 from keras.callbacks import Callback
 from keras.callbacks import EarlyStopping
@@ -32,21 +33,6 @@ def timer(name):
     t0 = time.time()
     yield
     print(f'[{name}] done in {time.time() - t0:.0f} s')
-
-
-class F1Evaluation(Callback):
-    def __init__(self, validation_data=(), interval=1):
-        super(Callback, self).__init__()
-
-        self.interval = interval
-        self.X_val, self.y_val = validation_data
-
-    def on_epoch_end(self, epoch, logs={}):
-        if epoch % self.interval == 0:
-            y_pred = self.model.predict(self.X_val, verbose=0)
-            y_pred = (y_pred > 0.5).astype(int)
-            score = f1_score(self.y_val, y_pred)
-            print("\n F1 Score - epoch: %d - score: %.6f \n" % (epoch+1, score))
 
 
 def sepcnn_model(blocks,
@@ -98,100 +84,115 @@ def sepcnn_model(blocks,
     return model
 
 
-def main():
-    with timer('load data'):
-        train_df = pd.read_csv("../input/train.csv")
-        test_df = pd.read_csv('../input/test.csv')
-
-    with timer('load embeddings'):
-        embeddings_index = {}
-        f = open('../input/embeddings/glove.840B.300d/glove.840B.300d.txt')
-        for line in tqdm(f):
-            values = line.split(" ")
-            word = values[0]
-            coefs = np.asarray(values[1:], dtype='float32')
-            embeddings_index[word] = coefs
-        f.close()
-
-        print('Found %s word vectors.' % len(embeddings_index))
-
-    with timer('preprocess'):
-        tokenizer = Tokenizer(num_words=TOP_K)
-        tokenizer.fit_on_texts(np.hstack((
-            train_df.question_text.values, test_df.question_text.values))
+def get_best_threshold(y_pred_val,
+                       y_val):
+    threshold_dict = {}
+    for thresh in np.arange(0.1, 0.501, 0.01):
+        thresh = np.round(thresh, 2)
+        threshold_dict[thresh] = f1_score(
+            y_val, (y_pred_val > thresh).astype(int)
         )
-        X_train = tokenizer.texts_to_sequences(train_df.question_text.values)
-        X_test = tokenizer.texts_to_sequences(test_df.question_text.values)
-        word_index = tokenizer.word_index
 
-        max_length = len(max(X_train, key=len))
-        if max_length > MAX_SEQUENCE_LENGTH:
-            max_length = MAX_SEQUENCE_LENGTH
+    best_threshold = max(threshold_dict, key=threshold_dict.get)
+    print("best threshold: {}".format(best_threshold))
+    print("best f1 score: {}".format(threshold_dict[best_threshold]))
+    return best_threshold
 
-        X_train = pad_sequences(X_train, maxlen=max_length)
-        X_test = pad_sequences(X_test, maxlen=max_length)
 
-    with timer('calculate embedding matrix'):
-        embedding_matrix = np.zeros((len(word_index) + 1, EMBEDDING_DIM))
-        for word, i in word_index.items():
-            embedding_vector = embeddings_index.get(word)
-            if embedding_vector is not None:
-                embedding_matrix[i] = embedding_vector
-
+def fit_predict(X_train,
+                X_val,
+                y_train,
+                y_val,
+                X_test,
+                model,
+                batch_size=1024):
     with timer('fitting'):
-        X_train, X_val, y_train, y_val = train_test_split(
-            X_train,
-            train_df.target.values,
-            test_size=0.1,
-            random_state=39
-        )
-        class_weights = class_weight.compute_class_weight(
-            'balanced',
-            np.unique(train_df.target.values),
-            train_df.target.values
-        )
         early_stopping = EarlyStopping(monitor='val_loss', patience=2)
-        f1_Score = F1Evaluation(validation_data=(X_val, y_val), interval=1)
         model_checkpoint = ModelCheckpoint(
-            'best_cnn.h5',
+            'best.h5',
             save_best_only=True,
             save_weights_only=True
         )
-        model = sepcnn_model(
-            blocks=2,
-            filters=64,
-            kernel_size=3,
-            dropout_rate=0.2,
-            pool_size=3,
-            input_shape=X_train.shape[1:],
-            is_embedding_trainable=False,
-            embedding_matrix=embedding_matrix
+        class_weights = class_weight.compute_class_weight(
+            'balanced',
+            np.unique(y_train),
+            y_train
         )
-
         model.compile(
             loss='binary_crossentropy',
             optimizer='adam'
         )
 
-        hist = model.fit(
+        model.fit(
             X_train,
             y_train,
             validation_data=(X_val, y_val),
             epochs=1000,
-            batch_size=128,
+            batch_size=batch_size,
             class_weight=class_weights,
-            callbacks=[early_stopping, model_checkpoint, f1_Score]
+            callbacks=[early_stopping, model_checkpoint],
+            verbose=1
         )
+
+    model.load_weights('best.h5')
+    y_pred_val = model.predict(X_val, batch_size=2048)[:, 0]
 
     with timer('predicting'):
-        y_pred = model.predict(X_test, batch_size=1024)[:, 0]
-        y_pred = (np.array(y_pred) > 0.5).astype(np.int)
+        y_pred = model.predict(X_test, batch_size=2048)[:, 0]
 
-        submit_df = pd.DataFrame({"qid": test_df["qid"], "prediction": y_pred})
-        submit_df.to_csv(
-            "submission.csv",
-            index=False
-        )
+    get_best_threshold(y_pred_val, y_val)
+    return y_pred, y_pred_val
+
+
+def main():
+    with timer('load data'):
+        test_df = pd.read_csv('../input/test.csv')
+        X_train = joblib.load('../input/X_train.joblib')
+        y_train = joblib.load('../input/y_train.joblib')
+        X_test = joblib.load('../input/X_test.joblib')
+        glove_embedding = joblib.load('../input/glove_embedding.joblib')
+        test_df = pd.read_csv('../input/test.csv')
+        qid = test_df["qid"]
+
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_train,
+        y_train,
+        test_size=0.1,
+        random_state=39
+    )
+
+    sepcnn = sepcnn_model(
+        blocks=2,
+        filters=64,
+        kernel_size=3,
+        dropout_rate=0.2,
+        pool_size=3,
+        input_shape=X_train.shape[1:],
+        is_embedding_trainable=False,
+        embedding_matrix=glove_embedding
+    )
+
+    sepcnn_pred_test, sepcnn_pred_val = fit_predict(
+        X_train=X_train,
+        X_val=X_val,
+        y_train=y_train,
+        y_val=y_val,
+        X_test=X_test,
+        model=sepcnn,
+        batch_size=1024
+    )
+
+    del glove_embedding
+    gc.collect()
+
+    threshold = get_best_threshold(sepcnn_pred_val, y_val)
+    y_pred = (np.array(sepcnn_pred_test) > threshold).astype(np.int)
+
+    submit_df = pd.DataFrame({"qid": qid, "prediction": y_pred})
+    submit_df.to_csv(
+        "submission.csv",
+        index=False
+    )
 
 
 if __name__ == '__main__':
