@@ -5,6 +5,7 @@ import time
 import numpy as np
 import pandas as pd
 from keras import backend as K
+from keras import regularizers
 from keras.callbacks import Callback
 from keras.callbacks import EarlyStopping
 from keras.callbacks import ModelCheckpoint
@@ -209,25 +210,6 @@ def main():
         word_index=word_index,
         embedding_path=GLOVE_PATH
     )
-    '''
-    gru_glove = bigru_model(
-        hidden_dim=64,
-        dropout_rate=0.1,
-        input_shape=X_train.shape[1:],
-        is_embedding_trainable=False,
-        embedding_matrix=glove_embedding
-    )
-
-    gru_glove_pred_test, gru_glove_pred_val = fit_predict(
-        X_train=X_train,
-        X_val=X_val,
-        y_train=y_train,
-        y_val=y_val,
-        X_test=X_test,
-        model=gru_glove,
-        batch_size=1024
-    )
-    '''
 
     attn_glove = bigru_attn_model(
         hidden_dim=64,
@@ -249,52 +231,6 @@ def main():
 
     del glove_embedding
     gc.collect()
-
-    '''
-    fast_text_embedding = load_embedding_matrix(
-        word_index=word_index,
-        embedding_path=FAST_TEXT_PATH
-    )
-
-    gru_fast_text = bigru_model(
-        hidden_dim=64,
-        dropout_rate=0.1,
-        input_shape=X_train.shape[1:],
-        is_embedding_trainable=False,
-        embedding_matrix=fast_text_embedding
-    )
-
-    gru_fast_text_pred_test, gru_fast_text_pred_val = fit_predict(
-        X_train=X_train,
-        X_val=X_val,
-        y_train=y_train,
-        y_val=y_val,
-        X_test=X_test,
-        model=gru_fast_text,
-        batch_size=1024
-    )
-
-    attn_fast_text = bigru_attn_model(
-        hidden_dim=64,
-        dropout_rate=0.1,
-        input_shape=X_train.shape[1:],
-        is_embedding_trainable=False,
-        embedding_matrix=fast_text_embedding
-    )
-
-    gru_fast_text_pred_test, gru_fast_text_pred_val = fit_predict(
-        X_train=X_train,
-        X_val=X_val,
-        y_train=y_train,
-        y_val=y_val,
-        X_test=X_test,
-        model=attn_fast_text,
-        batch_size=1024
-    )
-
-    del fast_text_embedding
-    gc.collect()
-    '''
 
     threshold = get_best_threshold(attn_glove_pred_val, y_val)
     y_pred = (np.array(attn_glove_pred_test) > threshold).astype(np.int)
