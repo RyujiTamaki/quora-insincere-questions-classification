@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import joblib
 from keras import backend as K
+from keras import optimizers
 from keras.callbacks import Callback
 from keras.callbacks import EarlyStopping
 from keras.callbacks import ModelCheckpoint
@@ -23,11 +24,6 @@ from sklearn.utils import class_weight
 from tqdm import tqdm
 
 
-TOP_K = 20000
-MAX_SEQUENCE_LENGTH = 50
-EMBEDDING_DIM = 300
-
-
 @contextmanager
 def timer(name):
     t0 = time.time()
@@ -41,14 +37,20 @@ def sepcnn_model(blocks,
                  dropout_rate,
                  pool_size,
                  input_shape,
+                 use_pretrained_embedding=False,
                  is_embedding_trainable=False,
                  embedding_matrix=None):
     model = Sequential()
-    model.add(Embedding(input_dim=embedding_matrix.shape[0],
-                        output_dim=embedding_matrix.shape[1],
-                        input_length=input_shape[0],
-                        weights=[embedding_matrix],
-                        trainable=is_embedding_trainable))
+    if use_pretrained_embedding:
+        model.add(Embedding(input_dim=embedding_matrix.shape[0],
+                            output_dim=embedding_matrix.shape[1],
+                            input_length=input_shape[0],
+                            weights=[embedding_matrix],
+                            trainable=is_embedding_trainable))
+    else:
+        model.add(Embedding(input_dim=num_features,
+                            output_dim=embedding_dim,
+                            input_length=input_shape[0]))
 
     for _ in range(blocks-1):
         model.add(Dropout(rate=dropout_rate))
@@ -120,7 +122,7 @@ def fit_predict(X_train,
         )
         model.compile(
             loss='binary_crossentropy',
-            optimizer='adam'
+            optimizer=optimizers.Adam(lr=0.01)
         )
 
         model.fit(
@@ -168,6 +170,7 @@ def main():
         dropout_rate=0.2,
         pool_size=3,
         input_shape=X_train.shape[1:],
+        use_pretrained_embedding=True,
         is_embedding_trainable=False,
         embedding_matrix=glove_embedding
     )
@@ -181,9 +184,6 @@ def main():
         model=sepcnn,
         batch_size=1024
     )
-
-    del glove_embedding
-    gc.collect()
 
     threshold = get_best_threshold(sepcnn_pred_val, y_val)
     y_pred = (np.array(sepcnn_pred_test) > threshold).astype(np.int)
