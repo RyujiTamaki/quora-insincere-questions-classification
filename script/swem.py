@@ -4,6 +4,7 @@ import os
 import time
 import numpy as np
 import pandas as pd
+import joblib
 from keras import backend as K
 from keras import regularizers
 from keras.callbacks import Callback
@@ -13,7 +14,6 @@ from keras.layers import AveragePooling1D
 from keras.layers import Bidirectional
 from keras.layers import BatchNormalization
 from keras.layers import concatenate
-from keras.layers import Concatenate
 from keras.layers import CuDNNGRU
 from keras.layers import dot
 from keras.layers import Dense
@@ -27,7 +27,6 @@ from keras.layers import PReLU
 from keras.layers import Reshape
 from keras.layers import SpatialDropout1D
 from keras.models import Model
-from keras.layers import Conv1D, MaxPool1D, BatchNormalization
 from keras.preprocessing.sequence import pad_sequences
 from keras.preprocessing.text import Tokenizer
 from sklearn.metrics import f1_score
@@ -39,6 +38,7 @@ MAX_FEATURES = 50000
 MAX_SEQUENCE_LENGTH = 100
 EMBEDDING_DIM = 300
 GLOVE_PATH = '../input/embeddings/glove.840B.300d/glove.840B.300d.txt'
+FAST_TEXT_PATH = '../input/embeddings/wiki-news-300d-1M/wiki-news-300d-1M.vec'
 
 @contextmanager
 def timer(name):
@@ -69,39 +69,6 @@ def load_embedding_matrix(word_index,
                 embedding_matrix[i] = embedding_vector
 
     return embedding_matrix
-
-
-def bigru_attn_model(hidden_dim,
-                     dropout_rate,
-                     input_shape,
-                     is_embedding_trainable=False,
-                     embedding_matrix=None):
-
-    inp = Input(shape=(input_shape[0],))
-    # (MAX_SEQUENCE_LENGTH, EMBEDDING_DIM)
-    x = Embedding(input_dim=embedding_matrix.shape[0],
-                  output_dim=embedding_matrix.shape[1],
-                  input_length=input_shape[0],
-                  weights=[embedding_matrix],
-                  trainable=is_embedding_trainable)(inp)
-    # (MAX_SEQUENCE_LENGTH, hidden_dim * 2)
-    h = Bidirectional(CuDNNGRU(hidden_dim, return_sequences=True))(x)
-    # (MAX_SEQUENCE_LENGTH, hidden_dim)
-    a = Dense(hidden_dim, activation='tanh')(h)
-    # (MAX_SEQUENCE_LENGTH, 8)
-    a = Dense(8, activation="sigmoid")(a)
-    # (8, hidden * 2)
-    m = dot([a, h], axes=(1, 1))
-    # (8 * hidden * 2)
-    x = Flatten()(m)
-    x = Dense(8 * hidden_dim * 2, activation="relu")(x)
-    x = Dropout(dropout_rate)(x)
-    x = Dense(8 * hidden_dim * 2, activation="relu")(x)
-    x = Dropout(dropout_rate)(x)
-    x = Dense(1, activation="sigmoid")(x)
-    model = Model(inputs=inp, outputs=x)
-    model.summary()
-    return model
 
 
 def swem(dropout_rate,
@@ -138,47 +105,6 @@ def swem(dropout_rate,
     x = Dense(1, activation="sigmoid")(x)
     model = Model(inputs=inp, outputs=x)
     model.summary()
-    return model
-
-
-def cnn_model(filters=64,
-              filter_sizes=[1, 2, 3, 4],
-              dropout_rate=0.1,
-              input_shape=None,
-              is_embedding_trainable=False,
-              embedding_matrix=None):
-
-    maxlen = input_shape[0]
-    inp = Input(shape=(maxlen,))
-    x = Embedding(input_dim=embedding_matrix.shape[0],
-                  output_dim=embedding_matrix.shape[1],
-                  input_length=maxlen,
-                  weights=[embedding_matrix],
-                  trainable=is_embedding_trainable)(inp)
-    x = SpatialDropout1D(0.4)(x)
-    x = Reshape((maxlen, EMBEDDING_DIM, 1))(x)
-
-    conv_0 = Conv1D(filters, kernel_size=(filter_sizes[0]),
-                    kernel_initializer='he_normal', activation='elu')(x)
-    conv_1 = Conv1D(filters, kernel_size=(filter_sizes[1]),
-                    kernel_initializer='he_normal', activation='elu')(x)
-    conv_2 = Conv1D(filters, kernel_size=(filter_sizes[2]),
-                    kernel_initializer='he_normal', activation='elu')(x)
-    conv_3 = Conv1D(filters, kernel_size=(filter_sizes[3]),
-                    kernel_initializer='he_normal', activation='elu')(x)
-
-    maxpool_0 = MaxPool1D(pool_size=(maxlen - filter_sizes[0] + 1))(conv_0)
-    maxpool_1 = MaxPool1D(pool_size=(maxlen - filter_sizes[1] + 1))(conv_1)
-    maxpool_2 = MaxPool1D(pool_size=(maxlen - filter_sizes[2] + 1))(conv_2)
-    maxpool_3 = MaxPool1D(pool_size=(maxlen - filter_sizes[3] + 1))(conv_3)
-
-    x = Concatenate(axis=1)([maxpool_0, maxpool_1, maxpool_2, maxpool_3])
-    x = Flatten()(x)
-    x = BatchNormalization(x)
-    # x = Dropout(dropout_rate)(x)
-
-    outp = Dense(1, activation="sigmoid")(x)
-    model = Model(inputs=inp, outputs=outp)
     return model
 
 
@@ -269,44 +195,9 @@ def main():
         test_size=0.1,
         random_state=39
     )
-
     glove_embedding = load_embedding_matrix(
         word_index=word_index,
         embedding_path=GLOVE_PATH
-    )
-
-    gru_attn = bigru_attn_model(
-        hidden_dim=64,
-        dropout_rate=0.5,
-        input_shape=X_train.shape[1:],
-        is_embedding_trainable=False,
-        embedding_matrix=glove_embedding
-    )
-
-    gru_attn_pred_test, gru_attn_pred_val = fit_predict(
-        X_train=X_train,
-        X_val=X_val,
-        y_train=y_train,
-        y_val=y_val,
-        X_test=X_test,
-        model=gru_attn,
-        batch_size=1024
-    )
-
-    cnn = cnn_model(
-        input_shape=X_train.shape[1:],
-        is_embedding_trainable=True,
-        embedding_matrix=glove_embedding
-    )
-
-    cnn_pred_test, cnn_pred_val = fit_predict(
-        X_train=X_train,
-        X_val=X_val,
-        y_train=y_train,
-        y_val=y_val,
-        X_test=X_test,
-        model=cnn,
-        batch_size=1024
     )
 
     swem_max = swem(
@@ -377,17 +268,11 @@ def main():
         batch_size=1024
     )
 
-    swem_pred_val = (swem_max_pred_val + swem_aver_pred_val +
-                     swem_concat_pred_val + swem_hier_pred_val) / 4
+    y_pred_val = (swem_max_pred_val + swem_aver_pred_val +
+                  swem_concat_pred_val + swem_hier_pred_val) / 4
 
-    swem_pred_test = (swem_max_pred_test + swem_aver_pred_test +
-                      swem_concat_pred_test + swem_hier_pred_test) / 4
-
-    y_pred_val = (gru_attn_pred_val + cnn_pred_val +
-                  swem_pred_val) / 3
-
-    y_pred_test = (gru_attn_pred_test + cnn_pred_test +
-                   swem_pred_test) / 3
+    y_pred_test = (swem_max_pred_test + swem_aver_pred_test +
+                   swem_concat_pred_test + swem_hier_pred_test) / 4
 
     del glove_embedding
     gc.collect()

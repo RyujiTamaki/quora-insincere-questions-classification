@@ -71,7 +71,7 @@ def swem(dropout_rate,
         x_max = GlobalMaxPooling1D()(x)
         x = concatenate([x_aver, x_max])
     if pool_type == 'hier':
-        x = AveragePooling1D(pool_size=2,
+        x = AveragePooling1D(pool_size=5,
                              strides=None,
                              padding='same')(x)
         x = GlobalMaxPooling1D()(x)
@@ -159,57 +159,6 @@ def main():
         y_train,
         test_size=0.1,
         random_state=39
-    )
-
-    swem_max = swem(
-        dropout_rate=0.1,
-        input_shape=X_train.shape[1:],
-        embedding_matrix=glove_embedding,
-        pool_type='max'
-    )
-
-    swem_max_pred_test, swem_max_pred_val = fit_predict(
-        X_train=X_train,
-        X_val=X_val,
-        y_train=y_train,
-        y_val=y_val,
-        X_test=X_test,
-        model=swem_max,
-        batch_size=1024
-    )
-
-    swem_aver = swem(
-        dropout_rate=0.1,
-        input_shape=X_train.shape[1:],
-        embedding_matrix=glove_embedding,
-        pool_type='aver'
-    )
-
-    swem_aver_pred_test, swem_aver_pred_val = fit_predict(
-        X_train=X_train,
-        X_val=X_val,
-        y_train=y_train,
-        y_val=y_val,
-        X_test=X_test,
-        model=swem_aver,
-        batch_size=1024
-    )
-
-    swem_concat = swem(
-        dropout_rate=0.1,
-        input_shape=X_train.shape[1:],
-        embedding_matrix=glove_embedding,
-        pool_type='concat'
-    )
-
-    swem_concat_pred_test, swem_concat_pred_val = fit_predict(
-        X_train=X_train,
-        X_val=X_val,
-        y_train=y_train,
-        y_val=y_val,
-        X_test=X_test,
-        model=swem_concat,
-        batch_size=1024
     )
 
     swem_hier = swem(

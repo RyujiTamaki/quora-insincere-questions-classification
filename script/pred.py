@@ -11,6 +11,7 @@ from keras.callbacks import Callback
 from keras.callbacks import EarlyStopping
 from keras.callbacks import ModelCheckpoint
 from keras.layers import Bidirectional
+from keras.layers import BatchNormalization
 from keras.layers import Concatenate
 from keras.layers import CuDNNGRU
 from keras.layers import dot
@@ -20,6 +21,7 @@ from keras.layers import Embedding
 from keras.layers import GlobalMaxPool1D
 from keras.layers import Flatten
 from keras.layers import Input
+from keras.layers import PReLU
 from keras.layers import Reshape
 from keras.models import Model
 from keras.preprocessing.sequence import pad_sequences

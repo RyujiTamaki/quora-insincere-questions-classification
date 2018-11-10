@@ -170,7 +170,7 @@ def main():
         dropout_rate=0.2,
         pool_size=3,
         input_shape=X_train.shape[1:],
-        use_pretrained_embedding=True,
+        use_pretrained_embedding=False,
         is_embedding_trainable=False,
         embedding_matrix=glove_embedding
     )

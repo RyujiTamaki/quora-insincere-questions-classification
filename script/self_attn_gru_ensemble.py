@@ -23,7 +23,7 @@ from keras.layers import Reshape
 from keras.models import Model
 from keras.preprocessing.sequence import pad_sequences
 from keras.preprocessing.text import Tokenizer
-from gensim.models.word2vec import Word2Vec
+from gensim.models import KeyedVectors
 from sklearn.metrics import f1_score
 from sklearn.model_selection import train_test_split
 from sklearn.utils import class_weight
@@ -52,32 +52,48 @@ def load_embedding_matrix(word_index,
                           embedding_path=None):
     with timer('load embeddings'):
         embedding_matrix = np.zeros((len(word_index) + 1, EMBEDDING_DIM))
-
+        embeddings_index = {}
         if embedding_path == GLOVE_PATH:
-            for o in open(embedding_path):
-                if len(o) > 100:
-                    embeddings_index = dict(get_coefs(*o.split(" ")))
-        if embedding_path == FAST_TEXT_PATH:
-            for o in open(embedding_path):
-                if len(o) > 100:
-                    embeddings_index = dict(get_coefs(*o.split(" ")))
-        if embedding_path == PARAGRAM_PATH:
-            for o in open(embedding_path, encoding="utf8", errors='ignore'):
-                if len(o) > 100:
-                    embeddings_index = dict(get_coefs(*o.split(" ")))
+            f = open(embedding_path)
+            for line in f:
+                values = line.split(" ")
+                word = values[0]
+                coefs = np.asarray(values[1:], dtype='float32')
+                embeddings_index[word] = coefs
+            f.close()
 
-            for word, i in word_index.items():
-                embedding_vector = embeddings_index.get(word)
-                if embedding_vector is not None:
-                    embedding_matrix[i] = embedding_vector
+        if embedding_path == FAST_TEXT_PATH:
+            f = open(embedding_path)
+            for line in f:
+                values = line.split(" ")
+                word = values[0]
+                coefs = np.asarray(values[1:], dtype='float32')
+                embeddings_index[word] = coefs
+            f.close()
+
+        if embedding_path == PARAGRAM_PATH:
+            f = open(embedding_path, encoding="utf8", errors='ignore')
+            for line in f:
+                values = line.split(" ")
+                word = values[0]
+                coefs = np.asarray(values[1:], dtype='float32')
+                embeddings_index[word] = coefs
+            f.close()
 
         if embedding_path == WORD2VEC_PATH:
-            w2v = Word2Vec.load(path)
-            for word, i in word_index.items():
+            embeddings_index = KeyedVectors.load_word2vec_format(
+                embedding_path, binary=True)
+
+        for word, i in word_index.items():
+            if embedding_path == WORD2VEC_PATH:
                 try:
-                    embedding_matrix[i] = w2v[word]
+                    embedding_vector = embeddings_index.get_vector(word)
                 except KeyError:
                     pass
+            else:
+                embedding_vector = embeddings_index.get(word)
+            if embedding_vector is not None:
+                embedding_matrix[i] = embedding_vector
 
     return embedding_matrix
 
@@ -105,9 +121,9 @@ def bigru_attn_model(hidden_dim,
     m = dot([a, h], axes=(1, 1))
     # (8 * hidden * 2)
     x = Flatten()(m)
-    x = Dense(8 * hidden_dim * 2, activation="relu")(x)
+    x = Dense(1024, activation="relu")(x)
     x = Dropout(dropout_rate)(x)
-    x = Dense(8 * hidden_dim * 2, activation="relu")(x)
+    x = Dense(1024, activation="relu")(x)
     x = Dropout(dropout_rate)(x)
     x = Dense(1, activation="sigmoid")(x)
     model = Model(inputs=inp, outputs=x)
@@ -203,13 +219,39 @@ def main():
         random_state=39
     )
 
+    w2v_embedding = load_embedding_matrix(
+        word_index=word_index,
+        embedding_path=WORD2VEC_PATH
+    )
+
+    attn_w2v = bigru_attn_model(
+        hidden_dim=64,
+        dropout_rate=0.5,
+        input_shape=X_train.shape[1:],
+        is_embedding_trainable=False,
+        embedding_matrix=w2v_embedding
+    )
+
+    attn_w2v_pred_test, attn_w2v_pred_val = fit_predict(
+        X_train=X_train,
+        X_val=X_val,
+        y_train=y_train,
+        y_val=y_val,
+        X_test=X_test,
+        model=attn_w2v,
+        batch_size=1024
+    )
+
+    del w2v_embedding
+    gc.collect()
+
     glove_embedding = load_embedding_matrix(
         word_index=word_index,
         embedding_path=GLOVE_PATH
     )
 
     attn_glove = bigru_attn_model(
-        hidden_dim=128,
+        hidden_dim=64,
         dropout_rate=0.5,
         input_shape=X_train.shape[1:],
         is_embedding_trainable=False,
@@ -279,32 +321,6 @@ def main():
     )
 
     del paragram_embedding
-    gc.collect()
-
-    w2v_embedding = load_embedding_matrix(
-        word_index=word_index,
-        embedding_path=WORD2VEC_PATH
-    )
-
-    attn_w2v = bigru_attn_model(
-        hidden_dim=64,
-        dropout_rate=0.5,
-        input_shape=X_train.shape[1:],
-        is_embedding_trainable=False,
-        embedding_matrix=w2v_embedding
-    )
-
-    attn_w2v_pred_test, attn_w2v_pred_val = fit_predict(
-        X_train=X_train,
-        X_val=X_val,
-        y_train=y_train,
-        y_val=y_val,
-        X_test=X_test,
-        model=attn_w2v,
-        batch_size=1024
-    )
-
-    del w2v_embedding
     gc.collect()
 
     y_pred_val = (attn_glove_val + attn_fast_text_val +
