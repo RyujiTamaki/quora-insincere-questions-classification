@@ -77,6 +77,8 @@ def fasttext_model(vocab_size,
                         input_length=input_shape[0]))
 
     model.add(GlobalAveragePooling1D())
+    model.add(Dense(EMBEDDING_DIM, activation="relu"))
+    model.add(Dropout(rate=0.1))
     model.add(Dense(1, activation='sigmoid'))
     model.summary()
     return model
