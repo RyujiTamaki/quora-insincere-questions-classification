@@ -128,7 +128,7 @@ def swem(dropout_rate,
         x_max = GlobalMaxPooling1D()(x)
         x = concatenate([x_aver, x_max])
     if pool_type == 'hier':
-        x = AveragePooling1D(pool_size=2,
+        x = AveragePooling1D(pool_size=5,
                              strides=None,
                              padding='same')(x)
         x = GlobalMaxPooling1D()(x)
@@ -156,7 +156,6 @@ def cnn_model(filters=64,
                   weights=[embedding_matrix],
                   trainable=is_embedding_trainable)(inp)
     x = SpatialDropout1D(0.4)(x)
-    x = Reshape((maxlen, EMBEDDING_DIM, 1))(x)
 
     conv_0 = Conv1D(filters, kernel_size=(filter_sizes[0]),
                     kernel_initializer='he_normal', activation='elu')(x)
@@ -174,7 +173,7 @@ def cnn_model(filters=64,
 
     x = Concatenate(axis=1)([maxpool_0, maxpool_1, maxpool_2, maxpool_3])
     x = Flatten()(x)
-    x = BatchNormalization(x)
+    x = BatchNormalization()(x)
     # x = Dropout(dropout_rate)(x)
 
     outp = Dense(1, activation="sigmoid")(x)
@@ -229,7 +228,7 @@ def fit_predict(X_train,
             batch_size=batch_size,
             class_weight=class_weights,
             callbacks=[early_stopping, model_checkpoint],
-            verbose=1
+            verbose=2
         )
 
     model.load_weights('best.h5')
