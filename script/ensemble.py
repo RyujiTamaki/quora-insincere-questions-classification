@@ -38,9 +38,9 @@ from sklearn.utils import class_weight
 import tensorflow as tf
 
 
-os.environ['PYTHONHASHSEED'] = '0'
-np.random.seed(42)
-rn.seed(12345)
+# os.environ['PYTHONHASHSEED'] = '0'
+# np.random.seed(42)
+# rn.seed(12345)
 
 MAX_FEATURES = 50000
 MAX_SEQUENCE_LENGTH = 100
