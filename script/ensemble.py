@@ -231,7 +231,7 @@ def fit_predict(X_train,
 
         model.summary()
 
-        for i in range(5):
+        for i in range(7):
             model.fit(
                 X_train,
                 y_train,
@@ -291,277 +291,94 @@ def main():
         embedding_path=FAST_TEXT_PATH
     )
 
+    embeddings = [glove_embedding, fast_text_embedding]
+
     gru_attn_pred_test = []
     gru_attn_pred_val = []
 
-    gru_attn = bigru_attn_model(
-        hidden_dim=64,
-        dropout_rate=0.5,
-        input_shape=X_train.shape[1:],
-        is_embedding_trainable=False,
-        embedding_matrix=glove_embedding
-    )
+    for embedding_matrix in embeddings:
+        for _ in range(2):
+            gru_attn = bigru_attn_model(
+                hidden_dim=64,
+                dropout_rate=0.5,
+                input_shape=X_train.shape[1:],
+                is_embedding_trainable=False,
+                embedding_matrix=embedding_matrix
+            )
 
-    pred_test, pred_val = fit_predict(
-        X_train=X_train,
-        X_val=X_val,
-        y_train=y_train,
-        y_val=y_val,
-        X_test=X_test,
-        model=gru_attn,
-        lr=0.001,
-        batch_size=1024
-    )
+            pred_test, pred_val = fit_predict(
+                X_train=X_train,
+                X_val=X_val,
+                y_train=y_train,
+                y_val=y_val,
+                X_test=X_test,
+                model=gru_attn,
+                lr=0.001,
+                batch_size=1024
+            )
 
-    gru_attn_pred_test.append(pred_test)
-    gru_attn_pred_val.append(pred_val)
+            gru_attn_pred_test.append(pred_test)
+            gru_attn_pred_val.append(pred_val)
 
-    gru_attn = bigru_attn_model(
-        hidden_dim=64,
-        dropout_rate=0.5,
-        input_shape=X_train.shape[1:],
-        is_embedding_trainable=False,
-        embedding_matrix=glove_embedding
-    )
-
-    pred_test, pred_val = fit_predict(
-        X_train=X_train,
-        X_val=X_val,
-        y_train=y_train,
-        y_val=y_val,
-        X_test=X_test,
-        model=gru_attn,
-        lr=0.001,
-        batch_size=1024
-    )
-
-    gru_attn_pred_test.append(pred_test)
-    gru_attn_pred_val.append(pred_val)
-
-    del gru_attn
-    gc.collect()
+            del gru_attn
+            gc.collect()
 
     cnn_pred_test = []
     cnn_pred_val = []
 
-    cnn = cnn_model(
-        input_shape=X_train.shape[1:],
-        is_embedding_trainable=False,
-        embedding_matrix=glove_embedding
-    )
+    for embedding_matrix in embeddings:
+        cnn = cnn_model(
+            input_shape=X_train.shape[1:],
+            is_embedding_trainable=False,
+            embedding_matrix=embedding_matrix
+        )
 
-    pred_test, pred_val = fit_predict(
-        X_train=X_train,
-        X_val=X_val,
-        y_train=y_train,
-        y_val=y_val,
-        X_test=X_test,
-        model=cnn,
-        lr=0.003,
-        batch_size=1024
-    )
+        pred_test, pred_val = fit_predict(
+            X_train=X_train,
+            X_val=X_val,
+            y_train=y_train,
+            y_val=y_val,
+            X_test=X_test,
+            model=cnn,
+            lr=0.003,
+            batch_size=1024
+        )
 
-    cnn_pred_test.append(pred_test)
-    cnn_pred_val.append(pred_val)
+        cnn_pred_test.append(pred_test)
+        cnn_pred_val.append(pred_val)
 
-    cnn = cnn_model(
-        input_shape=X_train.shape[1:],
-        is_embedding_trainable=False,
-        embedding_matrix=fast_text_embedding
-    )
-
-    pred_test, pred_val = fit_predict(
-        X_train=X_train,
-        X_val=X_val,
-        y_train=y_train,
-        y_val=y_val,
-        X_test=X_test,
-        model=cnn,
-        lr=0.003,
-        batch_size=1024
-    )
-
-    cnn_pred_test.append(pred_test)
-    cnn_pred_val.append(pred_val)
-
-    del cnn
-    gc.collect()
+        del cnn
+        gc.collect()
 
     swem_pred_test = []
     swem_pred_val = []
+    pool_types = ['max', 'aver', 'concat', 'hier']
 
-    swem = build_swem(
-        dropout_rate=0.1,
-        input_shape=X_train.shape[1:],
-        embedding_matrix=glove_embedding,
-        pool_type='max'
-    )
+    for embedding_matrix in embeddings:
+        for pool_type in pool_types:
+            swem = build_swem(
+                dropout_rate=0.1,
+                input_shape=X_train.shape[1:],
+                embedding_matrix=embeddings,
+                pool_type='pool_types'
+            )
 
-    pred_test, pred_val = fit_predict(
-        X_train=X_train,
-        X_val=X_val,
-        y_train=y_train,
-        y_val=y_val,
-        X_test=X_test,
-        model=swem,
-        lr=0.003,
-        batch_size=1024
-    )
+            pred_test, pred_val = fit_predict(
+                X_train=X_train,
+                X_val=X_val,
+                y_train=y_train,
+                y_val=y_val,
+                X_test=X_test,
+                model=swem,
+                lr=0.003,
+                batch_size=1024
+            )
 
-    swem_pred_test.append(pred_test)
-    swem_pred_val.append(pred_val)
+            swem_pred_test.append(pred_test)
+            swem_pred_val.append(pred_val)
 
-    swem = build_swem(
-        dropout_rate=0.1,
-        input_shape=X_train.shape[1:],
-        embedding_matrix=glove_embedding,
-        pool_type='aver'
-    )
-
-    pred_test, pred_val = fit_predict(
-        X_train=X_train,
-        X_val=X_val,
-        y_train=y_train,
-        y_val=y_val,
-        X_test=X_test,
-        model=swem,
-        lr=0.003,
-        batch_size=1024
-    )
-
-    swem_pred_test.append(pred_test)
-    swem_pred_val.append(pred_val)
-
-    swem = build_swem(
-        dropout_rate=0.1,
-        input_shape=X_train.shape[1:],
-        embedding_matrix=glove_embedding,
-        pool_type='concat'
-    )
-
-    pred_test, pred_val = fit_predict(
-        X_train=X_train,
-        X_val=X_val,
-        y_train=y_train,
-        y_val=y_val,
-        X_test=X_test,
-        model=swem,
-        lr=0.003,
-        batch_size=1024
-    )
-
-    swem_pred_test.append(pred_test)
-    swem_pred_val.append(pred_val)
-
-    swem = build_swem(
-        dropout_rate=0.1,
-        input_shape=X_train.shape[1:],
-        embedding_matrix=glove_embedding,
-        pool_type='hier'
-    )
-
-    pred_test, pred_val = fit_predict(
-        X_train=X_train,
-        X_val=X_val,
-        y_train=y_train,
-        y_val=y_val,
-        X_test=X_test,
-        model=swem,
-        lr=0.003,
-        batch_size=1024
-    )
-
-    swem_pred_test.append(pred_test)
-    swem_pred_val.append(pred_val)
-
-    swem = build_swem(
-        dropout_rate=0.1,
-        input_shape=X_train.shape[1:],
-        embedding_matrix=fast_text_embedding,
-        pool_type='max'
-    )
-
-    pred_test, pred_val = fit_predict(
-        X_train=X_train,
-        X_val=X_val,
-        y_train=y_train,
-        y_val=y_val,
-        X_test=X_test,
-        model=swem,
-        lr=0.003,
-        batch_size=1024
-    )
-
-    swem_pred_test.append(pred_test)
-    swem_pred_val.append(pred_val)
-
-    swem = build_swem(
-        dropout_rate=0.1,
-        input_shape=X_train.shape[1:],
-        embedding_matrix=fast_text_embedding,
-        pool_type='aver'
-    )
-
-    pred_test, pred_val = fit_predict(
-        X_train=X_train,
-        X_val=X_val,
-        y_train=y_train,
-        y_val=y_val,
-        X_test=X_test,
-        model=swem,
-        lr=0.003,
-        batch_size=1024
-    )
-
-    swem_pred_test.append(pred_test)
-    swem_pred_val.append(pred_val)
-
-    swem = build_swem(
-        dropout_rate=0.1,
-        input_shape=X_train.shape[1:],
-        embedding_matrix=fast_text_embedding,
-        pool_type='concat'
-    )
-
-    pred_test, pred_val = fit_predict(
-        X_train=X_train,
-        X_val=X_val,
-        y_train=y_train,
-        y_val=y_val,
-        X_test=X_test,
-        model=swem,
-        lr=0.003,
-        batch_size=1024
-    )
-
-    swem_pred_test.append(pred_test)
-    swem_pred_val.append(pred_val)
-
-    swem = build_swem(
-        dropout_rate=0.1,
-        input_shape=X_train.shape[1:],
-        embedding_matrix=fast_text_embedding,
-        pool_type='hier'
-    )
-
-    pred_test, pred_val = fit_predict(
-        X_train=X_train,
-        X_val=X_val,
-        y_train=y_train,
-        y_val=y_val,
-        X_test=X_test,
-        model=swem,
-        lr=0.003,
-        batch_size=1024
-    )
-
-    swem_pred_test.append(pred_test)
-    swem_pred_val.append(pred_val)
-
-
-
-    del glove_embedding
-    gc.collect()
+            del swem
+            gc.collect()
 
     gru_attn_pred_val = np.array(gru_attn_pred_val).mean(axis=0)
     gru_attn_pred_test = np.array(gru_attn_pred_test).mean(axis=0)
@@ -578,10 +395,10 @@ def main():
     print("SWEM ensemble")
     get_best_threshold(swem_pred_val, y_val)
 
-    y_pred_val = (0.4 * gru_attn_pred_val + 0.3 * cnn_pred_val +
+    y_pred_val = (0.5 * gru_attn_pred_val + 0.2 * cnn_pred_val +
                   0.3 * swem_pred_val)
 
-    y_pred_test = (0.4 * gru_attn_pred_test + 0.3 * cnn_pred_test +
+    y_pred_test = (0.5 * gru_attn_pred_test + 0.2 * cnn_pred_test +
                    0.3 * swem_pred_test)
 
     print("ALL ensemble")
