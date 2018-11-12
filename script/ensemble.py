@@ -279,6 +279,11 @@ def main():
         embedding_path=GLOVE_PATH
     )
 
+    fast_text_embedding = load_embedding_matrix(
+        word_index=word_index,
+        embedding_path=FAST_TEXT_PATH
+    )
+
     gru_attn_pred_test = []
     gru_attn_pred_val = []
 
@@ -309,7 +314,7 @@ def main():
         dropout_rate=0.5,
         input_shape=X_train.shape[1:],
         is_embedding_trainable=False,
-        embedding_matrix=glove_embedding
+        embedding_matrix=fast_text_embedding
     )
 
     pred_test, pred_val = fit_predict(
@@ -327,53 +332,6 @@ def main():
     gru_attn_pred_val.append(pred_val)
 
     del gru_attn
-    gc.collect()
-
-    cnn_pred_test = []
-    cnn_pred_val = []
-
-    cnn = cnn_model(
-        filters=32,
-        input_shape=X_train.shape[1:],
-        is_embedding_trainable=False,
-        embedding_matrix=glove_embedding
-    )
-
-    pred_test, pred_val = fit_predict(
-        X_train=X_train,
-        X_val=X_val,
-        y_train=y_train,
-        y_val=y_val,
-        X_test=X_test,
-        model=cnn,
-        lr=0.001,
-        batch_size=2048
-    )
-
-    cnn_pred_test.append(pred_test)
-    cnn_pred_val.append(pred_val)
-
-    cnn = cnn_model(
-        input_shape=X_train.shape[1:],
-        is_embedding_trainable=False,
-        embedding_matrix=glove_embedding
-    )
-
-    pred_test, pred_val = fit_predict(
-        X_train=X_train,
-        X_val=X_val,
-        y_train=y_train,
-        y_val=y_val,
-        X_test=X_test,
-        model=cnn,
-        lr=0.001,
-        batch_size=2048
-    )
-
-    cnn_pred_test.append(pred_test)
-    cnn_pred_val.append(pred_val)
-
-    del cnn
     gc.collect()
 
     swem_pred_test = []
@@ -463,7 +421,91 @@ def main():
     swem_pred_test.append(pred_test)
     swem_pred_val.append(pred_val)
 
-    del glove_embedding
+    swem = build_swem(
+        dropout_rate=0.1,
+        input_shape=X_train.shape[1:],
+        embedding_matrix=fast_text_embedding,
+        pool_type='max'
+    )
+
+    pred_test, pred_val = fit_predict(
+        X_train=X_train,
+        X_val=X_val,
+        y_train=y_train,
+        y_val=y_val,
+        X_test=X_test,
+        model=swem,
+        lr=0.001,
+        batch_size=2048
+    )
+
+    swem_pred_test.append(pred_test)
+    swem_pred_val.append(pred_val)
+
+    swem = build_swem(
+        dropout_rate=0.1,
+        input_shape=X_train.shape[1:],
+        embedding_matrix=fast_text_embedding,
+        pool_type='aver'
+    )
+
+    pred_test, pred_val = fit_predict(
+        X_train=X_train,
+        X_val=X_val,
+        y_train=y_train,
+        y_val=y_val,
+        X_test=X_test,
+        model=swem,
+        lr=0.001,
+        batch_size=2048
+    )
+
+    swem_pred_test.append(pred_test)
+    swem_pred_val.append(pred_val)
+
+    swem = build_swem(
+        dropout_rate=0.1,
+        input_shape=X_train.shape[1:],
+        embedding_matrix=fast_text_embedding,
+        pool_type='concat'
+    )
+
+    pred_test, pred_val = fit_predict(
+        X_train=X_train,
+        X_val=X_val,
+        y_train=y_train,
+        y_val=y_val,
+        X_test=X_test,
+        model=swem,
+        lr=0.001,
+        batch_size=2048
+    )
+
+    swem_pred_test.append(pred_test)
+    swem_pred_val.append(pred_val)
+
+    swem = build_swem(
+        dropout_rate=0.1,
+        input_shape=X_train.shape[1:],
+        embedding_matrix=fast_text_embedding,
+        pool_type='hier'
+    )
+
+    pred_test, pred_val = fit_predict(
+        X_train=X_train,
+        X_val=X_val,
+        y_train=y_train,
+        y_val=y_val,
+        X_test=X_test,
+        model=swem,
+        lr=0.001,
+        batch_size=2048
+    )
+
+    swem_pred_test.append(pred_test)
+    swem_pred_val.append(pred_val)
+
+    del glove_embedding, fast_text_embedding
     gc.collect()
 
     gru_attn_pred_val = np.array(gru_attn_pred_val).mean(axis=0)
@@ -471,21 +513,14 @@ def main():
     print("GRU ensemble")
     get_best_threshold(gru_attn_pred_val, y_val)
 
-    cnn_pred_val = np.array(cnn_pred_val).mean(axis=0)
-    cnn_pred_test = np.array(cnn_pred_test).mean(axis=0)
-    print("CNN ensemble")
-    get_best_threshold(cnn_pred_val, y_val)
-
     swem_pred_val = np.array(swem_pred_val).mean(axis=0)
     swem_pred_test = np.array(swem_pred_test).mean(axis=0)
     print("SWEM ensemble")
     get_best_threshold(swem_pred_val, y_val)
 
-    y_pred_val = (0.4 * gru_attn_pred_val + 0.3 * cnn_pred_val +
-                  0.3 * swem_pred_val) / 3
+    y_pred_val = 0.6 * gru_attn_pred_val + 0.4 * swem_pred_val
 
-    y_pred_test = (0.4 * gru_attn_pred_test + 0.3 * cnn_pred_test +
-                   0.3 * swem_pred_test) / 3
+    y_pred_test = 0.6 * gru_attn_pred_test + 0.4 * swem_pred_test
 
     print("ALL ensemble")
     threshold = get_best_threshold(y_pred_val, y_val)
