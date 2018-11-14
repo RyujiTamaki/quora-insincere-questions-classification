@@ -246,7 +246,7 @@ def fit_predict(X_train,
         model.summary()
 
         val_loss = []
-        for i in range(5):
+        for i in range(3):
             model_checkpoint = ModelCheckpoint(
                 str(i) + '_weight.h5',
                 save_best_only=True,
@@ -286,6 +286,9 @@ def main():
         y_train = joblib.load('../input/y_train.joblib')
         X_test = joblib.load('../input/X_test.joblib')
         glove_embedding = joblib.load('../input/glove_embedding_MAX_FEATURES_20000.joblib')
+        fast_text_embedding = joblib.load('../input/fast_text_embedding.joblib')
+        paragram_embedding = joblib.load('../input/paragram_embedding.joblib')
+        word2vec_embedding = joblib.load('../input/word2vec_embedding.joblib')
         test_df = pd.read_csv('../input/test.csv')
         qid = test_df["qid"]
 
@@ -296,25 +299,15 @@ def main():
         random_state=39
     )
 
-    '''
+    embedding_matrix = np.concatenate((
+        glove_embedding, fast_text_embedding, paragram_embedding, word2vec_embedding
+    ), axis=1)
+
     cnn = cnn_model(
         filters=100,
         kernel_sizes=[2, 3, 4, 5],
         input_shape=X_train.shape[1:],
-        is_embedding_trainable=False,
-        embedding_matrix=glove_embedding
-    )
-
-    '''
-    sepcnn = sepcnn_model(
-        blocks=2,
-        filters=64,
-        kernel_size=5,
-        dropout_rate=0.2,
-        pool_size=3,
-        input_shape=X_train.shape[1:],
-        use_pretrained_embedding=True,
-        is_embedding_trainable=False,
+        is_embedding_trainable=True,
         embedding_matrix=glove_embedding
     )
 
@@ -324,9 +317,9 @@ def main():
         y_train=y_train,
         y_val=y_val,
         X_test=X_test,
-        model=sepcnn,
+        model=cnn,
         lr=0.001,
-        batch_size=256
+        batch_size=1024
     )
 
     threshold = get_best_threshold(pred_val, y_val)
