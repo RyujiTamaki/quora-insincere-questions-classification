@@ -5,6 +5,7 @@ import time
 import numpy as np
 import pandas as pd
 import random as rn
+from gensim.models import KeyedVectors
 from keras import backend as K
 from keras import optimizers
 from keras import regularizers
@@ -47,6 +48,8 @@ MAX_SEQUENCE_LENGTH = 100
 EMBEDDING_DIM = 300
 GLOVE_PATH = '../input/embeddings/glove.840B.300d/glove.840B.300d.txt'
 FAST_TEXT_PATH = '../input/embeddings/wiki-news-300d-1M/wiki-news-300d-1M.vec'
+PARAGRAM_PATH = '../input/embeddings/paragram_300_sl999/paragram_300_sl999.txt'
+WORD2VEC_PATH = '../input/embeddings/GoogleNews-vectors-negative300/GoogleNews-vectors-negative300.bin'
 
 @contextmanager
 def timer(name):
@@ -58,21 +61,50 @@ def timer(name):
 def load_embedding_matrix(word_index,
                           embedding_path=None):
     with timer('load embeddings'):
+        num_words = min(MAX_FEATURES, len(word_index)) + 1
+        embedding_matrix = np.zeros((num_words, EMBEDDING_DIM))
         embeddings_index = {}
-        f = open(embedding_path)
-        for line in f:
-            values = line.split(" ")
-            word = values[0]
-            coefs = np.asarray(values[1:], dtype='float32')
-            embeddings_index[word] = coefs
-        f.close()
+        if embedding_path == GLOVE_PATH:
+            f = open(embedding_path)
+            for line in f:
+                values = line.split(" ")
+                word = values[0]
+                coefs = np.asarray(values[1:], dtype='float32')
+                embeddings_index[word] = coefs
+            f.close()
 
-        print('Found %s word vectors.' % len(embeddings_index))
+        if embedding_path == FAST_TEXT_PATH:
+            f = open(embedding_path)
+            for line in f:
+                values = line.split(" ")
+                word = values[0]
+                coefs = np.asarray(values[1:], dtype='float32')
+                embeddings_index[word] = coefs
+            f.close()
 
-    with timer('calculate embedding matrix'):
-        embedding_matrix = np.zeros((len(word_index) + 1, EMBEDDING_DIM))
+        if embedding_path == PARAGRAM_PATH:
+            f = open(embedding_path, encoding="utf8", errors='ignore')
+            for line in f:
+                values = line.split(" ")
+                word = values[0]
+                coefs = np.asarray(values[1:], dtype='float32')
+                embeddings_index[word] = coefs
+            f.close()
+
+        if embedding_path == WORD2VEC_PATH:
+            embeddings_index = KeyedVectors.load_word2vec_format(
+                embedding_path, binary=True)
+
         for word, i in word_index.items():
-            embedding_vector = embeddings_index.get(word)
+            if i >= MAX_FEATURES:
+                continue
+            if embedding_path == WORD2VEC_PATH:
+                try:
+                    embedding_vector = embeddings_index.get_vector(word)
+                except KeyError:
+                    pass
+            else:
+                embedding_vector = embeddings_index.get(word)
             if embedding_vector is not None:
                 embedding_matrix[i] = embedding_vector
 
@@ -97,7 +129,7 @@ def bigru_attn_model(hidden_dim,
     # (MAX_SEQUENCE_LENGTH, hidden_dim)
     a = Dense(hidden_dim, activation='tanh')(h)
     # (MAX_SEQUENCE_LENGTH, 8)
-    a = Dense(8, activation="sigmoid")(a)
+    a = Dense(8, activation="softmax")(a)
     # (8, hidden * 2)
     m = dot([a, h], axes=(1, 1))
     # (8 * hidden * 2)
@@ -123,7 +155,7 @@ def build_swem(dropout_rate,
                   weights=[embedding_matrix],
                   trainable=False)(inp)
 
-    x = SpatialDropout1D(rate=dropout_rate)(x)
+    # x = SpatialDropout1D(rate=dropout_rate)(x)
     x = Dense(300, activation="relu")(x)
 
     if pool_type == 'aver':
@@ -147,8 +179,8 @@ def build_swem(dropout_rate,
     return model
 
 
-def cnn_model(filters=64,
-              filter_sizes=[1, 2, 3, 4],
+def cnn_model(filters=32,
+              kernel_sizes=[1, 2, 3, 4],
               dropout_rate=0.1,
               input_shape=None,
               is_embedding_trainable=False,
@@ -161,26 +193,19 @@ def cnn_model(filters=64,
                   input_length=maxlen,
                   weights=[embedding_matrix],
                   trainable=is_embedding_trainable)(inp)
-    x = SpatialDropout1D(0.4)(x)
+    # x = SpatialDropout1D(0.4)(x)
 
-    conv_0 = Conv1D(filters, kernel_size=(filter_sizes[0]),
-                    kernel_initializer='he_normal', activation='elu')(x)
-    conv_1 = Conv1D(filters, kernel_size=(filter_sizes[1]),
-                    kernel_initializer='he_normal', activation='elu')(x)
-    conv_2 = Conv1D(filters, kernel_size=(filter_sizes[2]),
-                    kernel_initializer='he_normal', activation='elu')(x)
-    conv_3 = Conv1D(filters, kernel_size=(filter_sizes[3]),
-                    kernel_initializer='he_normal', activation='elu')(x)
+    convs = []
+    for kernel_size in kernel_sizes:
+        conv = Conv1D(filters, kernel_size=(kernel_size),
+                      kernel_initializer='he_normal', activation='tanh')(x)
+        maxpool = MaxPool1D(pool_size=(maxlen - kernel_size + 1))(conv)
+        convs.append(maxpool)
 
-    maxpool_0 = MaxPool1D(pool_size=(maxlen - filter_sizes[0] + 1))(conv_0)
-    maxpool_1 = MaxPool1D(pool_size=(maxlen - filter_sizes[1] + 1))(conv_1)
-    maxpool_2 = MaxPool1D(pool_size=(maxlen - filter_sizes[2] + 1))(conv_2)
-    maxpool_3 = MaxPool1D(pool_size=(maxlen - filter_sizes[3] + 1))(conv_3)
-
-    x = Concatenate(axis=1)([maxpool_0, maxpool_1, maxpool_2, maxpool_3])
+    x = Concatenate(axis=1)(convs)
     x = Flatten()(x)
-    x = BatchNormalization()(x)
-    # x = Dropout(dropout_rate)(x)
+    # x = BatchNormalization()(x)
+    x = Dropout(0.1)(x)
 
     outp = Dense(1, activation="sigmoid")(x)
     model = Model(inputs=inp, outputs=outp)
@@ -208,16 +233,10 @@ def fit_predict(X_train,
                 y_val,
                 X_test,
                 model,
+                epochs=5,
                 lr=0.001,
                 batch_size=1024):
     with timer('fitting'):
-        early_stopping = EarlyStopping(monitor='val_loss', patience=2)
-        model_checkpoint = ModelCheckpoint(
-            'best.h5',
-            save_best_only=True,
-            save_weights_only=True
-        )
-
         class_weights = class_weight.compute_class_weight(
             'balanced',
             np.unique(y_train),
@@ -228,22 +247,33 @@ def fit_predict(X_train,
             loss='binary_crossentropy',
             optimizer=optimizers.Adam(lr=lr)
         )
-
         model.summary()
+        val_loss = []
+        for i in range(epochs):
+            model_checkpoint = ModelCheckpoint(
+                str(i) + '_weight.h5',
+                save_best_only=True,
+                save_weights_only=True
+            )
 
-        for i in range(7):
-            model.fit(
+            hist = model.fit(
                 X_train,
                 y_train,
                 validation_data=(X_val, y_val),
                 epochs=1,
-                batch_size=batch_size * (1 + i),
+                # batch_size=2**(11 + i),
+                batch_size=batch_size*(i + 1),
                 class_weight=class_weights,
-                callbacks=[early_stopping, model_checkpoint],
+                callbacks=[model_checkpoint],
                 verbose=2
             )
 
-    # model.load_weights('best.h5')
+            val_loss.extend(hist.history['val_loss'])
+
+    best_epoch_index = np.array(val_loss).argmin()
+    print("best epoch: {}".format(best_epoch_index + 1))
+    model.load_weights(str(best_epoch_index) + '_weight.h5')
+
     y_pred_val = model.predict(X_val, batch_size=2048)[:, 0]
 
     with timer('predicting'):
@@ -256,7 +286,7 @@ def fit_predict(X_train,
 def main():
     with timer('load data'):
         train_df = pd.read_csv("../input/train.csv")
-        test_df = pd.read_csv('../input/test.csv')
+        test_df = pd.read_csv("../input/test.csv")
         X_train = train_df["question_text"].fillna("_na_").values
         y_train = train_df["target"].values
         X_test = test_df["question_text"].fillna("_na_").values
@@ -264,11 +294,11 @@ def main():
 
     with timer('preprocess'):
         tokenizer = Tokenizer(num_words=MAX_FEATURES)
-        tokenizer.fit_on_texts(np.hstack((
-            train_df.question_text.values, test_df.question_text.values))
+        tokenizer.fit_on_texts(
+            train_df.question_text.tolist() + test_df.question_text.tolist()
         )
-        X_train = tokenizer.texts_to_sequences(train_df.question_text.values)
-        X_test = tokenizer.texts_to_sequences(test_df.question_text.values)
+        X_train = tokenizer.texts_to_sequences(X_train)
+        X_test = tokenizer.texts_to_sequences(X_test)
         word_index = tokenizer.word_index
 
         X_train = pad_sequences(X_train, maxlen=MAX_SEQUENCE_LENGTH)
@@ -291,43 +321,30 @@ def main():
         embedding_path=FAST_TEXT_PATH
     )
 
-    embeddings = [glove_embedding, fast_text_embedding]
+    paragram_embedding = load_embedding_matrix(
+        word_index=word_index,
+        embedding_path=PARAGRAM_PATH
+    )
+
+    word2vec_embedding = load_embedding_matrix(
+        word_index=word_index,
+        embedding_path=WORD2VEC_PATH
+    )
+
+    embedding_matrix = np.concatenate((
+        glove_embedding, fast_text_embedding, paragram_embedding, word2vec_embedding
+    ), axis=1)
+
+    del glove_embedding, fast_text_embedding, paragram_embedding, word2vec_embedding
+    gc.collect()
 
     gru_attn_pred_test = []
     gru_attn_pred_val = []
 
-    for embedding_matrix in embeddings:
-        for _ in range(2):
-            gru_attn = bigru_attn_model(
-                hidden_dim=64,
-                dropout_rate=0.5,
-                input_shape=X_train.shape[1:],
-                is_embedding_trainable=False,
-                embedding_matrix=embedding_matrix
-            )
-
-            pred_test, pred_val = fit_predict(
-                X_train=X_train,
-                X_val=X_val,
-                y_train=y_train,
-                y_val=y_val,
-                X_test=X_test,
-                model=gru_attn,
-                lr=0.001,
-                batch_size=1024
-            )
-
-            gru_attn_pred_test.append(pred_test)
-            gru_attn_pred_val.append(pred_val)
-
-            del gru_attn
-            gc.collect()
-
-    cnn_pred_test = []
-    cnn_pred_val = []
-
-    for embedding_matrix in embeddings:
-        cnn = cnn_model(
+    for _ in range(2):
+        gru_attn = bigru_attn_model(
+            hidden_dim=40,
+            dropout_rate=0.5,
             input_shape=X_train.shape[1:],
             is_embedding_trainable=False,
             embedding_matrix=embedding_matrix
@@ -339,9 +356,40 @@ def main():
             y_train=y_train,
             y_val=y_val,
             X_test=X_test,
-            model=cnn,
-            lr=0.003,
+            epochs=3,
+            model=gru_attn,
+            lr=0.001,
             batch_size=1024
+        )
+
+        gru_attn_pred_test.append(pred_test)
+        gru_attn_pred_val.append(pred_val)
+
+        del gru_attn
+        gc.collect()
+
+    cnn_pred_test = []
+    cnn_pred_val = []
+
+    for _ in range(2):
+        cnn = cnn_model(
+            filters=100,
+            kernel_sizes=[2, 3, 4, 5],
+            input_shape=X_train.shape[1:],
+            is_embedding_trainable=True,
+            embedding_matrix=embedding_matrix
+        )
+
+        pred_test, pred_val = fit_predict(
+            X_train=X_train,
+            X_val=X_val,
+            y_train=y_train,
+            y_val=y_val,
+            X_test=X_test,
+            epochs=2,
+            model=cnn,
+            lr=0.001,
+            batch_size=256
         )
 
         cnn_pred_test.append(pred_test)
@@ -349,36 +397,6 @@ def main():
 
         del cnn
         gc.collect()
-
-    swem_pred_test = []
-    swem_pred_val = []
-    pool_types = ['max', 'aver', 'concat', 'hier']
-
-    for embedding_matrix in embeddings:
-        for pool_type in pool_types:
-            swem = build_swem(
-                dropout_rate=0.1,
-                input_shape=X_train.shape[1:],
-                embedding_matrix=embeddings,
-                pool_type='pool_types'
-            )
-
-            pred_test, pred_val = fit_predict(
-                X_train=X_train,
-                X_val=X_val,
-                y_train=y_train,
-                y_val=y_val,
-                X_test=X_test,
-                model=swem,
-                lr=0.003,
-                batch_size=1024
-            )
-
-            swem_pred_test.append(pred_test)
-            swem_pred_val.append(pred_val)
-
-            del swem
-            gc.collect()
 
     gru_attn_pred_val = np.array(gru_attn_pred_val).mean(axis=0)
     gru_attn_pred_test = np.array(gru_attn_pred_test).mean(axis=0)
@@ -390,16 +408,8 @@ def main():
     print("CNN ensemble")
     get_best_threshold(cnn_pred_val, y_val)
 
-    swem_pred_val = np.array(swem_pred_val).mean(axis=0)
-    swem_pred_test = np.array(swem_pred_test).mean(axis=0)
-    print("SWEM ensemble")
-    get_best_threshold(swem_pred_val, y_val)
-
-    y_pred_val = (0.5 * gru_attn_pred_val + 0.2 * cnn_pred_val +
-                  0.3 * swem_pred_val)
-
-    y_pred_test = (0.5 * gru_attn_pred_test + 0.2 * cnn_pred_test +
-                   0.3 * swem_pred_test)
+    y_pred_val = (0.5 * gru_attn_pred_val + 0.5 * cnn_pred_val)
+    y_pred_test = (0.5 * gru_attn_pred_test + 0.5 * cnn_pred_test)
 
     print("ALL ensemble")
     threshold = get_best_threshold(y_pred_val, y_val)
