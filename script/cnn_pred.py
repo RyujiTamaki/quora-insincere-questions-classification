@@ -103,7 +103,7 @@ def cnn_model(filters=32,
                   input_length=maxlen,
                   weights=[embedding_matrix],
                   trainable=is_embedding_trainable)(inp)
-    x = SpatialDropout1D(0.2)(x)
+    x = SpatialDropout1D(0.3)(x)
 
     convs = []
     for kernel_size in kernel_sizes:
@@ -172,7 +172,7 @@ def fit_predict(X_train,
                 y_train,
                 validation_data=(X_val, y_val),
                 epochs=1,
-                # batch_size=2**(9 + i),
+                # batch_size=2**(8 + i),
                 batch_size=batch_size*(i + 1),
                 # batch_size=batch_size,
                 class_weight=class_weights,
@@ -234,7 +234,7 @@ def main():
         X_test=X_test,
         model=cnn,
         lr=0.001,
-        batch_size=512
+        batch_size=1024
     )
 
     threshold = get_best_threshold(pred_val, y_val)
