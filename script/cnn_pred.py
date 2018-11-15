@@ -11,24 +11,8 @@ from keras.callbacks import Callback
 from keras.callbacks import EarlyStopping
 from keras.callbacks import ModelCheckpoint
 from keras.engine.topology import Layer
-from keras.layers import Bidirectional
-from keras.layers import BatchNormalization
-from keras.layers import Concatenate
-from keras.layers import CuDNNGRU
-from keras.layers import dot
-from keras.layers import Dense
-from keras.layers import Dropout
-from keras.layers import Embedding
-from keras.layers import GlobalMaxPool1D
-from keras.layers import Flatten
-from keras.layers import Input
-from keras.layers import PReLU
-from keras.layers import Reshape
+from keras.layers import *
 from keras.models import Model
-from keras.layers import Conv1D, MaxPool1D, BatchNormalization
-from keras.layers import SeparableConv1D
-from keras.layers import MaxPooling1D
-from keras.layers import GlobalAveragePooling1D
 from keras.models import Sequential
 from keras.preprocessing.sequence import pad_sequences
 from keras.preprocessing.text import Tokenizer
@@ -48,76 +32,6 @@ def timer(name):
     t0 = time.time()
     yield
     print(f'[{name}] done in {time.time() - t0:.0f} s')
-
-
-class Attention(Layer):
-    def __init__(self, step_dim,
-                 W_regularizer=None, b_regularizer=None,
-                 W_constraint=None, b_constraint=None,
-                 bias=True, **kwargs):
-        self.supports_masking = True
-        self.init = initializers.get('glorot_uniform')
-
-        self.W_regularizer = regularizers.get(W_regularizer)
-        self.b_regularizer = regularizers.get(b_regularizer)
-
-        self.W_constraint = constraints.get(W_constraint)
-        self.b_constraint = constraints.get(b_constraint)
-
-        self.bias = bias
-        self.step_dim = step_dim
-        self.features_dim = 0
-        super(Attention, self).__init__(**kwargs)
-
-    def build(self, input_shape):
-        assert len(input_shape) == 3
-
-        self.W = self.add_weight((input_shape[-1],),
-                                 initializer=self.init,
-                                 name='{}_W'.format(self.name),
-                                 regularizer=self.W_regularizer,
-                                 constraint=self.W_constraint)
-        self.features_dim = input_shape[-1]
-
-        if self.bias:
-            self.b = self.add_weight((input_shape[1],),
-                                     initializer='zero',
-                                     name='{}_b'.format(self.name),
-                                     regularizer=self.b_regularizer,
-                                     constraint=self.b_constraint)
-        else:
-            self.b = None
-
-        self.built = True
-
-    def compute_mask(self, input, input_mask=None):
-        return None
-
-    def call(self, x, mask=None):
-        features_dim = self.features_dim
-        step_dim = self.step_dim
-
-        eij = K.reshape(K.dot(K.reshape(x, (-1, features_dim)),
-                        K.reshape(self.W, (features_dim, 1))), (-1, step_dim))
-
-        if self.bias:
-            eij += self.b
-
-        eij = K.tanh(eij)
-
-        a = K.exp(eij)
-
-        if mask is not None:
-            a *= K.cast(mask, K.floatx())
-
-        a /= K.cast(K.sum(a, axis=1, keepdims=True) + K.epsilon(), K.floatx())
-
-        a = K.expand_dims(a)
-        weighted_input = x * a
-        return K.sum(weighted_input, axis=1)
-
-    def compute_output_shape(self, input_shape):
-        return input_shape[0],  self.features_dim
 
 
 def sepcnn_model(blocks,
@@ -189,7 +103,7 @@ def cnn_model(filters=32,
                   input_length=maxlen,
                   weights=[embedding_matrix],
                   trainable=is_embedding_trainable)(inp)
-    # x = SpatialDropout1D(0.4)(x)
+    x = SpatialDropout1D(0.2)(x)
 
     convs = []
     for kernel_size in kernel_sizes:
@@ -258,8 +172,9 @@ def fit_predict(X_train,
                 y_train,
                 validation_data=(X_val, y_val),
                 epochs=1,
-                # batch_size=2**(11 + i),
+                # batch_size=2**(9 + i),
                 batch_size=batch_size*(i + 1),
+                # batch_size=batch_size,
                 class_weight=class_weights,
                 callbacks=[model_checkpoint],
                 verbose=2
@@ -285,7 +200,7 @@ def main():
         X_train = joblib.load('../input/X_train.joblib')
         y_train = joblib.load('../input/y_train.joblib')
         X_test = joblib.load('../input/X_test.joblib')
-        glove_embedding = joblib.load('../input/glove_embedding_MAX_FEATURES_20000.joblib')
+        glove_embedding = joblib.load('../input/glove_embedding.joblib')
         fast_text_embedding = joblib.load('../input/fast_text_embedding.joblib')
         paragram_embedding = joblib.load('../input/paragram_embedding.joblib')
         word2vec_embedding = joblib.load('../input/word2vec_embedding.joblib')
@@ -304,7 +219,7 @@ def main():
     ), axis=1)
 
     cnn = cnn_model(
-        filters=100,
+        filters=40,
         kernel_sizes=[2, 3, 4, 5],
         input_shape=X_train.shape[1:],
         is_embedding_trainable=True,
@@ -319,7 +234,7 @@ def main():
         X_test=X_test,
         model=cnn,
         lr=0.001,
-        batch_size=1024
+        batch_size=512
     )
 
     threshold = get_best_threshold(pred_val, y_val)
