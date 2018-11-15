@@ -173,6 +173,7 @@ def bigru_attn_model(hidden_dim,
                   trainable=False)(inp)
     # (MAX_SEQUENCE_LENGTH, hidden_dim * 2)
     h = Bidirectional(CuDNNGRU(hidden_dim, return_sequences=True))(x)
+    h = Bidirectional(CuDNNGRU(hidden_dim, return_sequences=True))(h)
     # (MAX_SEQUENCE_LENGTH, hidden_dim)
     a = Dense(hidden_dim, activation='tanh')(h)
     # (MAX_SEQUENCE_LENGTH, 8)
@@ -181,9 +182,9 @@ def bigru_attn_model(hidden_dim,
     m = dot([a, h], axes=(1, 1))
     # (8 * hidden * 2)
     x = Flatten()(m)
-    x = Dense(1024, activation="relu")(x)
+    x = Dense(640, activation="relu")(x)
     x = Dropout(dropout_rate)(x)
-    x = Dense(1024, activation="relu")(x)
+    x = Dense(640, activation="relu")(x)
     x = Dropout(dropout_rate)(x)
     x = Dense(1, activation="sigmoid")(x)
     model = Model(inputs=inp, outputs=x)
@@ -243,8 +244,8 @@ def fit_predict(X_train,
                 validation_data=(X_val, y_val),
                 epochs=1,
                 # batch_size=2**(9 + i),
-                # batch_size=batch_size*(i + 1),
-                batch_size=512,
+                batch_size=batch_size*(i + 1),
+                # batch_size=512,
                 class_weight=class_weights,
                 callbacks=[model_checkpoint],
                 verbose=2
@@ -288,8 +289,8 @@ def main():
         glove_embedding, fast_text_embedding, paragram_embedding, word2vec_embedding
     ), axis=1)
 
-    attn_glove = bigru_model(
-        hidden_dim=64,
+    attn_glove = bigru_attn_model(
+        hidden_dim=40,
         dropout_rate=0.5,
         input_shape=X_train.shape[1:],
         is_embedding_trainable=False,
@@ -303,7 +304,7 @@ def main():
         y_val=y_val,
         X_test=X_test,
         model=attn_glove,
-        epochs=5,
+        epochs=3,
         lr=0.001,
         batch_size=1024
     )
