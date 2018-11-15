@@ -102,11 +102,13 @@ def load_embedding_matrix(word_index,
                 try:
                     embedding_vector = embeddings_index.get_vector(word)
                 except KeyError:
-                    pass
+                    embedding_vector = None
             else:
                 embedding_vector = embeddings_index.get(word)
             if embedding_vector is not None:
                 embedding_matrix[i] = embedding_vector
+            if embedding_vector is None:
+                embedding_matrix[i] = np.random.uniform(-0.01, 0.01, 300)
 
     return embedding_matrix
 
