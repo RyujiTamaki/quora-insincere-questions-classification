@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import joblib
 from keras import backend as K
+from keras import optimizers
 from keras import regularizers
 from keras.callbacks import Callback
 from keras.callbacks import EarlyStopping
@@ -47,10 +48,10 @@ def timer(name):
     print(f'[{name}] done in {time.time() - t0:.0f} s')
 
 
-def swem(dropout_rate,
-         input_shape,
-         embedding_matrix=None,
-         pool_type='max'):
+def build_swem(dropout_rate,
+               input_shape,
+               embedding_matrix=None,
+               pool_type='max'):
 
     inp = Input(shape=(input_shape[0],))
     x = Embedding(input_dim=embedding_matrix.shape[0],
@@ -80,7 +81,6 @@ def swem(dropout_rate,
     x = Dropout(rate=dropout_rate)(x)
     x = Dense(1, activation="sigmoid")(x)
     model = Model(inputs=inp, outputs=x)
-    model.summary()
     return model
 
 
@@ -105,14 +105,11 @@ def fit_predict(X_train,
                 y_val,
                 X_test,
                 model,
+                epochs=3,
+                lr=0.001,
                 batch_size=1024):
     with timer('fitting'):
         early_stopping = EarlyStopping(monitor='val_loss', patience=2)
-        model_checkpoint = ModelCheckpoint(
-            'best.h5',
-            save_best_only=True,
-            save_weights_only=True
-        )
         class_weights = class_weight.compute_class_weight(
             'balanced',
             np.unique(y_train),
@@ -120,25 +117,39 @@ def fit_predict(X_train,
         )
         model.compile(
             loss='binary_crossentropy',
-            optimizer='adam'
+            optimizer=optimizers.Adam(lr=lr, clipvalue=0.5)
         )
 
-        model.fit(
-            X_train,
-            y_train,
-            validation_data=(X_val, y_val),
-            epochs=1000,
-            batch_size=batch_size,
-            class_weight=class_weights,
-            callbacks=[early_stopping, model_checkpoint],
-            verbose=2
-        )
+        # model.summary()
 
-    model.load_weights('best.h5')
+        val_loss = []
+        for i in range(epochs):
+            model_checkpoint = ModelCheckpoint(
+                str(i) + '_weight.h5',
+                save_best_only=True,
+                save_weights_only=True
+            )
+
+            hist = model.fit(
+                X_train,
+                y_train,
+                validation_data=(X_val, y_val),
+                epochs=1,
+                # batch_size=2**(9 + i),
+                batch_size=batch_size*(i + 1),
+                # batch_size=512,
+                class_weight=class_weights,
+                callbacks=[model_checkpoint],
+                verbose=2
+            )
+
+            val_loss.extend(hist.history['val_loss'])
+
+    best_epoch_index = np.array(val_loss).argmin()
+    print("best epoch: {}".format(best_epoch_index + 1))
+    model.load_weights(str(best_epoch_index) + '_weight.h5')
     y_pred_val = model.predict(X_val, batch_size=2048)[:, 0]
-
-    with timer('predicting'):
-        y_pred = model.predict(X_test, batch_size=2048)[:, 0]
+    y_pred = model.predict(X_test, batch_size=2048)[:, 0]
 
     get_best_threshold(y_pred_val, y_val)
     return y_pred, y_pred_val
@@ -151,6 +162,9 @@ def main():
         y_train = joblib.load('../input/y_train.joblib')
         X_test = joblib.load('../input/X_test.joblib')
         glove_embedding = joblib.load('../input/glove_embedding.joblib')
+        fast_text_embedding = joblib.load('../input/fast_text_embedding.joblib')
+        paragram_embedding = joblib.load('../input/paragram_embedding.joblib')
+        word2vec_embedding = joblib.load('../input/word2vec_embedding.joblib')
         test_df = pd.read_csv('../input/test.csv')
         qid = test_df["qid"]
 
@@ -161,41 +175,41 @@ def main():
         random_state=39
     )
 
-    swem_hier = swem(
-        dropout_rate=0.1,
-        input_shape=X_train.shape[1:],
-        embedding_matrix=glove_embedding,
-        pool_type='hier'
-    )
+    embedding_matrix = np.concatenate((
+        glove_embedding, fast_text_embedding, paragram_embedding, word2vec_embedding
+    ), axis=1)
 
-    swem_hier_pred_test, swem_hier_pred_val = fit_predict(
-        X_train=X_train,
-        X_val=X_val,
-        y_train=y_train,
-        y_val=y_val,
-        X_test=X_test,
-        model=swem_hier,
-        batch_size=1024
-    )
+    swem_pred_test = []
+    swem_pred_val = []
+    pool_types = ['max', 'aver', 'concat', 'hier']
 
-    y_pred_val = (swem_max_pred_val + swem_aver_pred_val +
-                  swem_concat_pred_val + swem_hier_pred_val) / 4
+    for pool_type in pool_types:
+        print('pool type: {}'.format(pool_type))
 
-    y_pred_test = (swem_max_pred_test + swem_aver_pred_test +
-                   swem_concat_pred_test + swem_hier_pred_test) / 4
+        swem = build_swem(
+            dropout_rate=0.1,
+            input_shape=X_train.shape[1:],
+            embedding_matrix=embedding_matrix,
+            pool_type=pool_type
+        )
 
-    del glove_embedding
-    gc.collect()
+        pred_test, pred_val = fit_predict(
+            X_train=X_train,
+            X_val=X_val,
+            y_train=y_train,
+            y_val=y_val,
+            X_test=X_test,
+            model=swem,
+            batch_size=1024
+        )
 
-    threshold = get_best_threshold(y_pred_val, y_val)
-    y_pred = (np.array(y_pred_test) > threshold).astype(np.int)
+        swem_pred_test.append(pred_test)
+        swem_pred_val.append(pred_val)
 
-    submit_df = pd.DataFrame({"qid": qid, "prediction": y_pred})
-    submit_df.to_csv(
-        "submission.csv",
-        index=False
-    )
-
+    swem_pred_val = np.array(swem_pred_val).mean(axis=0)
+    swem_pred_test = np.array(swem_pred_test).mean(axis=0)
+    print("SWEM ensemble")
+    get_best_threshold(swem_pred_val, y_val)
 
 if __name__ == '__main__':
     main()
