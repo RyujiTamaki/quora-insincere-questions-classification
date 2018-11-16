@@ -147,12 +147,12 @@ def bigru_model(hidden_dim,
                   weights=[embedding_matrix],
                   trainable=is_embedding_trainable)(inp)
 
-    x = Bidirectional(CuDNNGRU(hidden_dim, return_sequences=True))(x)
-    x = attention_3d_block(x)
-    x = Bidirectional(CuDNNGRU(hidden_dim, return_sequences=True))(x)
+    x = SpatialDropout1D(0.2)(x)
+
+    x = Bidirectional(CuDNNLSTM(40, return_sequences=True))(x)
+    x = Bidirectional(CuDNNGRU(40, return_sequences=True))(x)
     x = Attention(MAX_SEQUENCE_LENGTH)(x)
-    x = Dropout(dropout_rate)(x)
-    x = Dense(hidden_dim, activation="relu")(x)
+    # x = Dense(64, activation="relu")(x)
     x = Dense(1, activation="sigmoid")(x)
     model = Model(inputs=inp, outputs=x)
     return model
@@ -173,7 +173,6 @@ def bigru_attn_model(hidden_dim,
                   trainable=False)(inp)
     # (MAX_SEQUENCE_LENGTH, hidden_dim * 2)
     h = Bidirectional(CuDNNGRU(hidden_dim, return_sequences=True))(x)
-    h = Bidirectional(CuDNNGRU(hidden_dim, return_sequences=True))(h)
     # (MAX_SEQUENCE_LENGTH, hidden_dim)
     a = Dense(hidden_dim, activation='tanh')(h)
     # (MAX_SEQUENCE_LENGTH, 8)
@@ -244,7 +243,7 @@ def fit_predict(X_train,
                 validation_data=(X_val, y_val),
                 epochs=1,
                 # batch_size=2**(9 + i),
-                batch_size=batch_size*(i + 1),
+                batch_size=batch_size * (i + 1),
                 # batch_size=512,
                 class_weight=class_weights,
                 callbacks=[model_checkpoint],
@@ -308,9 +307,6 @@ def main():
         lr=0.001,
         batch_size=1024
     )
-
-    del glove_embedding
-    gc.collect()
 
     threshold = get_best_threshold(attn_glove_pred_val, y_val)
     y_pred = (np.array(attn_glove_pred_test) > threshold).astype(np.int)
