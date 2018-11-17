@@ -175,7 +175,7 @@ def build_gru(hidden_dim,
                           weights=[weights],
                           trainable=is_embedding_trainable)(inp)
             embeddings.append(x)
-        x = Concatenate(axis=1)(embeddings)
+        x = Concatenate(axis=2)(embeddings)
 
     if meta_embeddings == 'DME':
         for weights in embedding_matrix:
@@ -254,7 +254,7 @@ def fit_predict(X_train,
             optimizer=optimizers.Adam(lr=lr, clipvalue=0.5)
         )
 
-        # model.summary()
+        model.summary()
 
         val_loss = []
         for i in range(epochs):
@@ -325,7 +325,7 @@ def main():
             input_shape=X_train.shape[1:],
             model_type=i,
             is_embedding_trainable=False,
-            meta_embeddings='DME',
+            meta_embeddings='concat',
             embedding_matrix=embedding_matrix
         )
 
@@ -335,10 +335,10 @@ def main():
             y_train=y_train,
             y_val=y_val,
             X_test=X_test,
-            epochs=5,
+            epochs=3,
             model=gru,
             lr=0.001,
-            batch_size=512
+            batch_size=1024
         )
 
         y_pred_test.append(pred_test)
