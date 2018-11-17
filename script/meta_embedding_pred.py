@@ -318,12 +318,12 @@ def main():
     y_pred_test = []
     y_pred_val = []
 
-    for i in range(3):
+    for i in range(6):
         gru = build_gru(
             hidden_dim=40,
             dropout_rate=0.1,
             input_shape=X_train.shape[1:],
-            model_type=i,
+            model_type=i % 3,
             is_embedding_trainable=False,
             meta_embeddings='concat',
             embedding_matrix=embedding_matrix
