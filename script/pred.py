@@ -34,8 +34,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.utils import class_weight
 
 
-MAX_FEATURES = 50000
-MAX_SEQUENCE_LENGTH = 100
+MAX_FEATURES = 95000
+MAX_SEQUENCE_LENGTH = 70
 GLOVE_PATH = '../input/embeddings/glove.840B.300d/glove.840B.300d.txt'
 FAST_TEXT_PATH = '../input/embeddings/wiki-news-300d-1M/wiki-news-300d-1M.vec'
 
@@ -134,60 +134,63 @@ class Attention(Layer):
         return input_shape[0],  self.features_dim
 
 
-def bigru_model(hidden_dim,
-                dropout_rate,
-                input_shape,
-                is_embedding_trainable=False,
-                embedding_matrix=None):
-
+def build_gru(hidden_dim,
+              dropout_rate,
+              input_shape,
+              model_type=0,
+              is_embedding_trainable=False,
+              meta_embeddings='DME',
+              embedding_matrix=None):
     inp = Input(shape=(input_shape[0],))
-    x = Embedding(input_dim=embedding_matrix.shape[0],
-                  output_dim=embedding_matrix.shape[1],
-                  input_length=input_shape[0],
-                  weights=[embedding_matrix],
-                  trainable=is_embedding_trainable)(inp)
+    embeddings = []
+    if meta_embeddings == 'concat':
+        for weights in embedding_matrix:
+            x = Embedding(input_dim=weights.shape[0],
+                          output_dim=weights.shape[1],
+                          input_length=input_shape[0],
+                          weights=[weights],
+                          trainable=is_embedding_trainable)(inp)
+            embeddings.append(x)
+        x = Concatenate(axis=2)(embeddings)
 
-    x = SpatialDropout1D(0.2)(x)
+    if meta_embeddings == 'DME':
+        for weights in embedding_matrix:
+            x = Embedding(input_dim=weights.shape[0],
+                          output_dim=weights.shape[1],
+                          input_length=input_shape[0],
+                          weights=[weights],
+                          trainable=is_embedding_trainable)(inp)
+            x = Dense(300)(x)
+            embeddings.append(x)
+        x = add(embeddings)
 
-    x = Bidirectional(CuDNNLSTM(40, return_sequences=True))(x)
-    x = Bidirectional(CuDNNGRU(40, return_sequences=True))(x)
-    x = Attention(MAX_SEQUENCE_LENGTH)(x)
-    # x = Dense(64, activation="relu")(x)
+    if model_type == 0:
+        h = Bidirectional(CuDNNGRU(hidden_dim, return_sequences=True))(x)
+        a = Dense(hidden_dim, activation='tanh')(h)
+        a = Dense(8, activation="softmax")(a)
+        m = dot([a, h], axes=(1, 1))
+        x = Flatten()(m)
+        x = Dense(8 * hidden_dim * 2, activation="relu")(x)
+        x = Dropout(dropout_rate)(x)
+        x = Dense(8 * hidden_dim * 2, activation="relu")(x)
+        x = Dropout(dropout_rate)(x)
+    if model_type == 1:
+        x = Bidirectional(CuDNNLSTM(40, return_sequences=True))(x)
+        x = Bidirectional(CuDNNGRU(40, return_sequences=True))(x)
+        avg_pool = GlobalAveragePooling1D()(x)
+        max_pool = GlobalMaxPooling1D()(x)
+        x = concatenate([avg_pool, max_pool])
+        x = Dense(64, activation="relu")(x)
+        x = Dropout(0.1)(x)
+    if model_type == 2:
+        x = Bidirectional(CuDNNLSTM(40, return_sequences=True))(x)
+        x = Bidirectional(CuDNNGRU(40, return_sequences=True))(x)
+        x = Attention(MAX_SEQUENCE_LENGTH)(x)
+        x = Dense(64, activation="relu")(x)
+        x = Dropout(0.1)(x)
+
     x = Dense(1, activation="sigmoid")(x)
     model = Model(inputs=inp, outputs=x)
-    return model
-
-
-def bigru_attn_model(hidden_dim,
-                     dropout_rate,
-                     input_shape,
-                     is_embedding_trainable=False,
-                     embedding_matrix=None):
-
-    inp = Input(shape=(input_shape[0],))
-    # (MAX_SEQUENCE_LENGTH, EMBEDDING_DIM)
-    x = Embedding(input_dim=embedding_matrix.shape[0],
-                  output_dim=embedding_matrix.shape[1],
-                  input_length=input_shape[0],
-                  weights=[embedding_matrix],
-                  trainable=False)(inp)
-    # (MAX_SEQUENCE_LENGTH, hidden_dim * 2)
-    h = Bidirectional(CuDNNGRU(hidden_dim, return_sequences=True))(x)
-    # (MAX_SEQUENCE_LENGTH, hidden_dim)
-    a = Dense(hidden_dim, activation='tanh')(h)
-    # (MAX_SEQUENCE_LENGTH, 8)
-    a = Dense(8, activation="softmax")(a)
-    # (8, hidden * 2)
-    m = dot([a, h], axes=(1, 1))
-    # (8 * hidden * 2)
-    x = Flatten()(m)
-    x = Dense(640, activation="relu")(x)
-    x = Dropout(dropout_rate)(x)
-    x = Dense(640, activation="relu")(x)
-    x = Dropout(dropout_rate)(x)
-    x = Dense(1, activation="sigmoid")(x)
-    model = Model(inputs=inp, outputs=x)
-
     return model
 
 
@@ -227,7 +230,7 @@ def fit_predict(X_train,
             optimizer=optimizers.Adam(lr=lr, clipvalue=0.5)
         )
 
-        model.summary()
+        # model.summary()
 
         val_loss = []
         for i in range(epochs):
@@ -280,36 +283,49 @@ def main():
     X_train, X_val, y_train, y_val = train_test_split(
         X_train,
         y_train,
-        test_size=0.1,
+        test_size=0.01,
         random_state=39
     )
 
-    embedding_matrix = np.concatenate((
+    embedding_matrix = [
         glove_embedding, fast_text_embedding, paragram_embedding, word2vec_embedding
-    ), axis=1)
+    ]
 
-    attn_glove = bigru_attn_model(
-        hidden_dim=40,
-        dropout_rate=0.5,
-        input_shape=X_train.shape[1:],
-        is_embedding_trainable=False,
-        embedding_matrix=embedding_matrix
-    )
+    y_pred_test = []
+    y_pred_val = []
 
-    attn_glove_pred_test, attn_glove_pred_val = fit_predict(
-        X_train=X_train,
-        X_val=X_val,
-        y_train=y_train,
-        y_val=y_val,
-        X_test=X_test,
-        model=attn_glove,
-        epochs=3,
-        lr=0.001,
-        batch_size=1024
-    )
+    for i in range(3):
+        gru = build_gru(
+            hidden_dim=40,
+            dropout_rate=0.1,
+            input_shape=X_train.shape[1:],
+            model_type=i,
+            is_embedding_trainable=False,
+            meta_embeddings='concat',
+            embedding_matrix=embedding_matrix
+        )
 
-    threshold = get_best_threshold(attn_glove_pred_val, y_val)
-    y_pred = (np.array(attn_glove_pred_test) > threshold).astype(np.int)
+        pred_test, pred_val = fit_predict(
+            X_train=X_train,
+            X_val=X_val,
+            y_train=y_train,
+            y_val=y_val,
+            X_test=X_test,
+            epochs=3,
+            model=gru,
+            lr=0.001,
+            batch_size=1024
+        )
+
+        y_pred_test.append(pred_test)
+        y_pred_val.append(pred_val)
+
+    y_pred_test = np.array(y_pred_test).mean(axis=0)
+    y_pred_val = np.array(y_pred_val).mean(axis=0)
+
+    print("ALL ensemble")
+    threshold = get_best_threshold(y_pred_val, y_val)
+    y_pred = (np.array(y_pred_test) > threshold).astype(np.int)
 
     submit_df = pd.DataFrame({"qid": qid, "prediction": y_pred})
     submit_df.to_csv(
