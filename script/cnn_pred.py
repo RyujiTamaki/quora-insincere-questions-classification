@@ -34,75 +34,37 @@ def timer(name):
     print(f'[{name}] done in {time.time() - t0:.0f} s')
 
 
-def sepcnn_model(blocks,
-                 filters,
-                 kernel_size,
-                 dropout_rate,
-                 pool_size,
-                 input_shape,
-                 use_pretrained_embedding=False,
-                 is_embedding_trainable=False,
-                 embedding_matrix=None):
-    model = Sequential()
-    if use_pretrained_embedding:
-        model.add(Embedding(input_dim=embedding_matrix.shape[0],
-                            output_dim=embedding_matrix.shape[1],
-                            input_length=input_shape[0],
-                            weights=[embedding_matrix],
-                            trainable=is_embedding_trainable))
-    else:
-        model.add(Embedding(input_dim=embedding_matrix.shape[0],
-                            output_dim=embedding_matrix.shape[1],
-                            input_length=input_shape[0]))
-
-    for _ in range(blocks-1):
-        model.add(Dropout(rate=dropout_rate))
-        model.add(SeparableConv1D(filters=filters,
-                                  kernel_size=kernel_size,
-                                  activation='relu',
-                                  bias_initializer='random_uniform',
-                                  depthwise_initializer='random_uniform',
-                                  padding='same'))
-        model.add(SeparableConv1D(filters=filters,
-                                  kernel_size=kernel_size,
-                                  activation='relu',
-                                  bias_initializer='random_uniform',
-                                  depthwise_initializer='random_uniform',
-                                  padding='same'))
-        model.add(MaxPooling1D(pool_size=pool_size))
-
-    model.add(SeparableConv1D(filters=filters * 2,
-                              kernel_size=kernel_size,
-                              activation='relu',
-                              bias_initializer='random_uniform',
-                              depthwise_initializer='random_uniform',
-                              padding='same'))
-    model.add(SeparableConv1D(filters=filters * 2,
-                              kernel_size=kernel_size,
-                              activation='relu',
-                              bias_initializer='random_uniform',
-                              depthwise_initializer='random_uniform',
-                              padding='same'))
-    model.add(GlobalAveragePooling1D())
-    model.add(Dropout(rate=dropout_rate))
-    model.add(Dense(1, activation='sigmoid'))
-    return model
-
-
 def cnn_model(filters=32,
               kernel_sizes=[1, 2, 3, 4],
               dropout_rate=0.1,
               input_shape=None,
+              meta_embeddings='concat',
               is_embedding_trainable=False,
               embedding_matrix=None):
 
     maxlen = input_shape[0]
     inp = Input(shape=(maxlen,))
-    x = Embedding(input_dim=embedding_matrix.shape[0],
-                  output_dim=embedding_matrix.shape[1],
-                  input_length=maxlen,
-                  weights=[embedding_matrix],
-                  trainable=is_embedding_trainable)(inp)
+    embeddings = []
+    if meta_embeddings == 'concat':
+        for weights in embedding_matrix:
+            x = Embedding(input_dim=weights.shape[0],
+                          output_dim=weights.shape[1],
+                          input_length=input_shape[0],
+                          weights=[weights],
+                          trainable=is_embedding_trainable)(inp)
+            embeddings.append(x)
+        x = Concatenate(axis=2)(embeddings)
+
+    if meta_embeddings == 'DME':
+        for weights in embedding_matrix:
+            x = Embedding(input_dim=weights.shape[0],
+                          output_dim=weights.shape[1],
+                          input_length=input_shape[0],
+                          weights=[weights],
+                          trainable=is_embedding_trainable)(inp)
+            x = Dense(300)(x)
+            embeddings.append(x)
+        x = add(embeddings)
     x = SpatialDropout1D(0.3)(x)
 
     convs = []
@@ -160,7 +122,7 @@ def fit_predict(X_train,
         model.summary()
 
         val_loss = []
-        for i in range(3):
+        for i in range(2):
             model_checkpoint = ModelCheckpoint(
                 str(i) + '_weight.h5',
                 save_best_only=True,
@@ -214,16 +176,16 @@ def main():
         random_state=39
     )
 
-    embedding_matrix = np.concatenate((
+    embedding_matrix = [
         glove_embedding, fast_text_embedding, paragram_embedding, word2vec_embedding
-    ), axis=1)
+    ]
 
     cnn = cnn_model(
         filters=40,
         kernel_sizes=[2, 3, 4, 5],
         input_shape=X_train.shape[1:],
         is_embedding_trainable=True,
-        embedding_matrix=glove_embedding
+        embedding_matrix=embedding_matrix
     )
 
     pred_test, pred_val = fit_predict(
@@ -234,7 +196,7 @@ def main():
         X_test=X_test,
         model=cnn,
         lr=0.001,
-        batch_size=1024
+        batch_size=512
     )
 
     threshold = get_best_threshold(pred_val, y_val)
