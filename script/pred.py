@@ -245,8 +245,8 @@ def fit_predict(X_train,
                 y_train,
                 validation_data=(X_val, y_val),
                 epochs=1,
-                # batch_size=2**(9 + i),
-                batch_size=batch_size * (i + 1),
+                batch_size=2**(9 + i),
+                # batch_size=batch_size * (i + 1),
                 # batch_size=512,
                 class_weight=class_weights,
                 callbacks=[model_checkpoint],
@@ -314,7 +314,7 @@ def main():
             epochs=3,
             model=gru,
             lr=0.001,
-            batch_size=1024
+            batch_size=512
         )
 
         y_pred_test.append(pred_test)
