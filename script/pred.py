@@ -34,6 +34,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.utils import class_weight
 
 
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+
 MAX_FEATURES = 95000
 MAX_SEQUENCE_LENGTH = 70
 GLOVE_PATH = '../input/embeddings/glove.840B.300d/glove.840B.300d.txt'
@@ -165,6 +167,7 @@ def build_gru(hidden_dim,
         x = add(embeddings)
 
     if model_type == 0:
+        # A Structured Self-attentive Sentence Embedding https://arxiv.org/abs/1703.03130 
         h = Bidirectional(CuDNNGRU(hidden_dim, return_sequences=True))(x)
         a = Dense(hidden_dim, activation='tanh')(h)
         a = Dense(8, activation="softmax")(a)
@@ -175,6 +178,7 @@ def build_gru(hidden_dim,
         x = Dense(8 * hidden_dim * 2, activation="relu")(x)
         x = Dropout(dropout_rate)(x)
     if model_type == 1:
+        # https://www.kaggle.com/c/jigsaw-toxic-comment-classification-challenge/discussion/52644
         x = Bidirectional(CuDNNLSTM(40, return_sequences=True))(x)
         x = Bidirectional(CuDNNGRU(40, return_sequences=True))(x)
         avg_pool = GlobalAveragePooling1D()(x)
@@ -245,12 +249,12 @@ def fit_predict(X_train,
                 y_train,
                 validation_data=(X_val, y_val),
                 epochs=1,
-                batch_size=2**(10 + i),
+                batch_size=2**(7 + i),
                 # batch_size=batch_size * (i + 1),
                 # batch_size=512,
                 class_weight=class_weights,
                 callbacks=[model_checkpoint],
-                verbose=2
+                verbose=1
             )
 
             val_loss.extend(hist.history['val_loss'])
@@ -288,7 +292,7 @@ def main():
     )
 
     embedding_matrix = [
-        glove_embedding, fast_text_embedding, paragram_embedding, word2vec_embedding
+        glove_embedding, paragram_embedding
     ]
 
     y_pred_test = []
