@@ -145,6 +145,8 @@ def build_gru(hidden_dim,
               embedding_matrix=None):
     inp = Input(shape=(input_shape[0],))
     embeddings = []
+    # Dynamic Meta-Embeddings for Improved Sentence Representations
+    # https://arxiv.org/abs/1804.07983
     if meta_embeddings == 'concat':
         for weights in embedding_matrix:
             x = Embedding(input_dim=weights.shape[0],
@@ -166,10 +168,11 @@ def build_gru(hidden_dim,
             embeddings.append(x)
         x = add(embeddings)
 
-    x = SpatialDropout1D(0.2)(x)
+    # x = SpatialDropout1D(0.2)(x)
 
     if model_type == 0:
-        # A Structured Self-attentive Sentence Embedding https://arxiv.org/abs/1703.03130 
+        # A Structured Self-attentive Sentence Embedding
+        # https://arxiv.org/abs/1703.03130
         h = Bidirectional(CuDNNGRU(hidden_dim, return_sequences=True))(x)
         a = Dense(hidden_dim, activation='tanh')(h)
         a = Dense(8, activation="softmax")(a)
@@ -181,19 +184,32 @@ def build_gru(hidden_dim,
         x = Dropout(dropout_rate)(x)
     if model_type == 1:
         # https://www.kaggle.com/c/jigsaw-toxic-comment-classification-challenge/discussion/52644
-        x = Bidirectional(CuDNNLSTM(40, return_sequences=True))(x)
-        x = Bidirectional(CuDNNGRU(40, return_sequences=True))(x)
+        x = Bidirectional(CuDNNLSTM(hidden_dim, return_sequences=True))(x)
+        x = Bidirectional(CuDNNGRU(hidden_dim, return_sequences=True))(x)
         avg_pool = GlobalAveragePooling1D()(x)
         max_pool = GlobalMaxPooling1D()(x)
         x = concatenate([avg_pool, max_pool])
         x = Dense(64, activation="relu")(x)
         x = Dropout(0.1)(x)
     if model_type == 2:
-        x = Bidirectional(CuDNNLSTM(40, return_sequences=True))(x)
-        x = Bidirectional(CuDNNGRU(40, return_sequences=True))(x)
+        x = Bidirectional(CuDNNLSTM(hidden_dim, return_sequences=True))(x)
+        x = Bidirectional(CuDNNGRU(hidden_dim, return_sequences=True))(x)
         x = Attention(MAX_SEQUENCE_LENGTH)(x)
         x = Dense(64, activation="relu")(x)
         x = Dropout(0.1)(x)
+    if model_type == 3:
+        # Using millions of emoji occurrences to learn any-domain representations for detecting sentiment, emotion and sarcasm
+        # https://arxiv.org/abs/1708.00524
+        # https://www.kaggle.com/c/jigsaw-toxic-comment-classification-challenge/discussion/52563
+        lstm_1 = Bidirectional(CuDNNLSTM(hidden_dim, return_sequences=True))(x)
+        lstm_2 = Bidirectional(CuDNNLSTM(hidden_dim, return_sequences=True))(lstm_1)
+        x = concatenate([lstm_1, lstm_2])
+        x = Attention(MAX_SEQUENCE_LENGTH)(x)
+    if model_type == 4:
+        # Supervised Learning of Universal Sentence Representations from Natural Language Inference Data
+        # https://arxiv.org/abs/1705.02364
+        x = Bidirectional(CuDNNLSTM(hidden_dim, return_sequences=True))(x)
+        x = GlobalMaxPooling1D()(x)
 
     x = Dense(1, activation="sigmoid")(x)
     model = Model(inputs=inp, outputs=x)
@@ -251,9 +267,9 @@ def fit_predict(X_train,
                 y_train,
                 validation_data=(X_val, y_val),
                 epochs=1,
-                # batch_size=2**(7 + i),
+                batch_size=2**(8 + i),
                 # batch_size=batch_size * (i + 1),
-                batch_size=batch_size,
+                # batch_size=batch_size,
                 class_weight=class_weights,
                 callbacks=[model_checkpoint],
                 verbose=1
@@ -300,7 +316,7 @@ def main():
     y_pred_test = []
     y_pred_val = []
 
-    for i in range(3):
+    for i in range(5):
         gru = build_gru(
             hidden_dim=40,
             dropout_rate=0.1,
