@@ -166,6 +166,8 @@ def build_gru(hidden_dim,
             embeddings.append(x)
         x = add(embeddings)
 
+    x = SpatialDropout1D(0.5)(x)
+
     if model_type == 0:
         # A Structured Self-attentive Sentence Embedding https://arxiv.org/abs/1703.03130 
         h = Bidirectional(CuDNNGRU(hidden_dim, return_sequences=True))(x)
