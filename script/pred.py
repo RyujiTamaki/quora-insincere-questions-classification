@@ -267,7 +267,7 @@ def fit_predict(X_train,
                 y_train,
                 validation_data=(X_val, y_val),
                 epochs=1,
-                batch_size=2**(8 + i),
+                batch_size=2**(7 + i),  # Don't Decay the Learning Rate, Increase the Batch Size https://arxiv.org/abs/1711.00489
                 # batch_size=batch_size * (i + 1),
                 # batch_size=batch_size,
                 class_weight=class_weights,
