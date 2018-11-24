@@ -175,12 +175,12 @@ def build_gru(hidden_dim,
         # https://arxiv.org/abs/1703.03130
         h = Bidirectional(CuDNNGRU(hidden_dim, return_sequences=True))(x)
         a = Dense(hidden_dim, activation='tanh')(h)
-        a = Dense(8, activation="softmax")(a)
+        a = Dense(30, activation="softmax")(a)
         m = dot([a, h], axes=(1, 1))
         x = Flatten()(m)
-        x = Dense(8 * hidden_dim * 2, activation="relu")(x)
+        x = Dense(2000, activation="relu")(x)
         x = Dropout(dropout_rate)(x)
-        x = Dense(8 * hidden_dim * 2, activation="relu")(x)
+        x = Dense(2000, activation="relu")(x)
         x = Dropout(dropout_rate)(x)
     if model_type == 1:
         # https://www.kaggle.com/c/jigsaw-toxic-comment-classification-challenge/discussion/52644
@@ -210,6 +210,17 @@ def build_gru(hidden_dim,
         # https://arxiv.org/abs/1705.02364
         x = Bidirectional(CuDNNLSTM(hidden_dim, return_sequences=True))(x)
         x = GlobalMaxPooling1D()(x)
+    if model_type == 5:
+        # A Structured Self-attentive Sentence Embedding
+        # https://arxiv.org/abs/1703.03130
+        h = Bidirectional(CuDNNGRU(hidden_dim, return_sequences=True))(x)
+        a = Dense(hidden_dim, activation='tanh')(h)
+        a = Dense(30, activation="softmax")(a)
+        m = dot([a, h], axes=(1, 1))
+        x = Conv1D(300, 1, activation='relu')(m)
+        x = Conv1D(512, 1)(x)
+        x = GlobalAveragePooling1D()(x)
+
 
     x = Dense(1, activation="sigmoid")(x)
     model = Model(inputs=inp, outputs=x)
@@ -252,7 +263,7 @@ def fit_predict(X_train,
             optimizer=optimizers.Adam(lr=lr, clipvalue=0.5)
         )
 
-        # model.summary()
+        model.summary()
 
         val_loss = []
         for i in range(epochs):
@@ -267,8 +278,8 @@ def fit_predict(X_train,
                 y_train,
                 validation_data=(X_val, y_val),
                 epochs=1,
-                batch_size=2**(7 + i),  # Don't Decay the Learning Rate, Increase the Batch Size https://arxiv.org/abs/1711.00489
-                # batch_size=batch_size * (i + 1),
+                # batch_size=2**(7 + i),  # Don't Decay the Learning Rate, Increase the Batch Size https://arxiv.org/abs/1711.00489
+                batch_size=batch_size * (i + 1),
                 # batch_size=batch_size,
                 class_weight=class_weights,
                 callbacks=[model_checkpoint],
@@ -319,9 +330,9 @@ def main():
     for i in range(5):
         gru = build_gru(
             hidden_dim=40,
-            dropout_rate=0.1,
+            dropout_rate=0.5,
             input_shape=X_train.shape[1:],
-            model_type=i,
+            model_type=0,
             is_embedding_trainable=False,
             meta_embeddings='concat',
             embedding_matrix=embedding_matrix
@@ -336,7 +347,7 @@ def main():
             epochs=3,
             model=gru,
             lr=0.001,
-            batch_size=512
+            batch_size=1024
         )
 
         y_pred_test.append(pred_test)
