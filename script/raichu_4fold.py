@@ -23,6 +23,10 @@ embed_size = 300 # how big is each word vector
 max_features = 95000 # how many unique words to use (i.e num rows in embedding vector)
 maxlen = 70 # max number of words in a question to use
 
+GLOVE_PATH = '../input/embeddings/glove.840B.300d/glove.840B.300d.txt'
+FAST_TEXT_PATH = '../input/embeddings/wiki-news-300d-1M/wiki-news-300d-1M.vec'
+PARAGRAM_PATH = '../input/embeddings/paragram_300_sl999/paragram_300_sl999.txt'
+WORD2VEC_PATH = '../input/embeddings/GoogleNews-vectors-negative300/GoogleNews-vectors-negative300.bin'
 
 # https://www.kaggle.com/suicaokhoailang/lstm-attention-baseline-0-652-lb
 
@@ -264,10 +268,16 @@ def f1(y_true, y_pred):
     return 2*((precision*recall)/(precision+recall+K.epsilon()))
 
 
-def load_glove(word_index):
-    EMBEDDING_FILE = '../input/embeddings/glove.840B.300d/glove.840B.300d.txt'
-    def get_coefs(word,*arr): return word, np.asarray(arr, dtype='float32')
-    embeddings_index = dict(get_coefs(*o.split(" ")) for o in open(EMBEDDING_FILE))
+def load_embedding_matrix(word_index,
+                          embedding_path=None):
+
+    def get_coefs(word,*arr):
+        return word, np.asarray(arr, dtype='float32')
+
+    embeddings_index = dict(
+        get_coefs(*o.split(" ")) for o in open(
+            embedding_path, encoding="utf8", errors='ignore') if len(o)>100
+    )
 
     all_embs = np.stack(embeddings_index.values())
     emb_mean,emb_std = all_embs.mean(), all_embs.std()
@@ -277,49 +287,11 @@ def load_glove(word_index):
     nb_words = min(max_features, len(word_index))
     embedding_matrix = np.random.normal(emb_mean, emb_std, (nb_words, embed_size))
     for word, i in word_index.items():
-        if i >= max_features: continue
+        if i >= max_features:
+            continue
         embedding_vector = embeddings_index.get(word)
-        if embedding_vector is not None: embedding_matrix[i] = embedding_vector
-
-    return embedding_matrix
-
-
-def load_fasttext(word_index):
-    EMBEDDING_FILE = '../input/embeddings/wiki-news-300d-1M/wiki-news-300d-1M.vec'
-    def get_coefs(word,*arr): return word, np.asarray(arr, dtype='float32')
-    embeddings_index = dict(get_coefs(*o.split(" ")) for o in open(EMBEDDING_FILE) if len(o)>100)
-
-    all_embs = np.stack(embeddings_index.values())
-    emb_mean,emb_std = all_embs.mean(), all_embs.std()
-    embed_size = all_embs.shape[1]
-
-    # word_index = tokenizer.word_index
-    nb_words = min(max_features, len(word_index))
-    embedding_matrix = np.random.normal(emb_mean, emb_std, (nb_words, embed_size))
-    for word, i in word_index.items():
-        if i >= max_features: continue
-        embedding_vector = embeddings_index.get(word)
-        if embedding_vector is not None: embedding_matrix[i] = embedding_vector
-
-    return embedding_matrix
-
-
-def load_para(word_index):
-    EMBEDDING_FILE = '../input/embeddings/paragram_300_sl999/paragram_300_sl999.txt'
-    def get_coefs(word,*arr): return word, np.asarray(arr, dtype='float32')
-    embeddings_index = dict(get_coefs(*o.split(" ")) for o in open(EMBEDDING_FILE, encoding="utf8", errors='ignore') if len(o)>100)
-
-    all_embs = np.stack(embeddings_index.values())
-    emb_mean,emb_std = all_embs.mean(), all_embs.std()
-    embed_size = all_embs.shape[1]
-
-    # word_index = tokenizer.word_index
-    nb_words = min(max_features, len(word_index))
-    embedding_matrix = np.random.normal(emb_mean, emb_std, (nb_words, embed_size))
-    for word, i in word_index.items():
-        if i >= max_features: continue
-        embedding_vector = embeddings_index.get(word)
-        if embedding_vector is not None: embedding_matrix[i] = embedding_vector
+        if embedding_vector is not None:
+            embedding_matrix[i] = embedding_vector
 
     return embedding_matrix
 
@@ -407,8 +379,16 @@ def threshold_search(y_true, y_proba):
 
 
 train_X, test_X, train_y, word_index = load_and_prec()
-glove_embedding = load_glove(word_index)
-paragram_embedding = load_para(word_index)
+glove_embedding = load_embedding_matrix(
+    word_index=word_index,
+    embedding_path=GLOVE_PATH
+)
+
+paragram_embedding = load_embedding_matrix(
+    word_index=word_index,
+    embedding_path=PARAGRAM_PATH
+)
+
 embedding_matrix = np.mean([glove_embedding, paragram_embedding], axis=0)
 # embedding_concat = np.concatenate((glove_embedding, paragram_embedding), axis=1)
 
