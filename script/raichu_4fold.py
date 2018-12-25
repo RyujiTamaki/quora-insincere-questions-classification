@@ -332,7 +332,10 @@ def load_and_prec():
 def model_lstm_atten(embedding_matrix):
 
     inp = Input(shape=(maxlen,))
-    x = Embedding(max_features, embed_size, weights=[embedding_matrix], trainable=False)(inp)
+    x = Embedding(input_dim=embedding_matrix.shape[0],
+                  output_dim=embedding_matrix.shape[1],
+                  weights=[embedding_matrix],
+                  trainable=False)(inp)
     x = SpatialDropout1D(0.1)(x)
     x = Bidirectional(CuDNNLSTM(40, return_sequences=True))(x)
     y = Bidirectional(CuDNNGRU(40, return_sequences=True))(x)
@@ -354,12 +357,27 @@ def model_lstm_atten(embedding_matrix):
 
 
 def train_pred(model, train_X, train_y, val_X, val_y, epochs=2, callback=None):
-    for e in range(epochs):
-        model.fit(train_X, train_y, batch_size=512, epochs=1, validation_data=(val_X, val_y), callbacks=callback, verbose=0)
-        pred_val_y = model.predict([val_X], batch_size=2048, verbose=0)
+    model_checkpoint = ModelCheckpoint(
+        'best.h5',
+        save_best_only=True,
+        save_weights_only=True
+    )
 
-        best_score = metrics.f1_score(val_y, (pred_val_y > 0.33).astype(int))
-        print("Epoch: ", e, "-    Val F1 Score: {:.4f}".format(best_score))
+    hist = model.fit(
+        X_train,
+        y_train,
+        validation_data=(X_val, y_val),
+        epochs=epochs,
+        batch_size=512,
+        callbacks=[model_checkpoint],
+        verbose=0
+    )
+
+    best_epoch_index = np.array(hist.history['val_loss']).argmin()
+    best_val_loss = np.array(hist.history['val_loss']).min()
+    print("best val_loss: {}".format(best_val_loss))
+    print("best epoch: {}".format(best_epoch_index + 1))
+    model.load_weights('best.h5')
 
     pred_test_y = model.predict([test_X], batch_size=2048, verbose=0)
     print('=' * 60)
@@ -389,8 +407,8 @@ paragram_embedding = load_embedding_matrix(
     embedding_path=PARAGRAM_PATH
 )
 
-embedding_matrix = np.mean([glove_embedding, paragram_embedding], axis=0)
-# embedding_concat = np.concatenate((glove_embedding, paragram_embedding), axis=1)
+embedding_mean = np.mean([glove_embedding, paragram_embedding], axis=0)
+embedding_concat = np.concatenate((glove_embedding, paragram_embedding), axis=1)
 
 
 DATA_SPLIT_SEED = 2018
@@ -406,13 +424,19 @@ for idx, (train_idx, valid_idx) in enumerate(splits):
         y_train = train_y[train_idx]
         X_val = train_X[valid_idx]
         y_val = train_y[valid_idx]
-        model = model_lstm_atten(embedding_matrix)
-        pred_val_y, pred_test_y, best_score = train_pred(model, X_train, y_train, X_val, y_val, epochs = 8, callback = [clr,])
+        model = model_lstm_atten(embedding_mean)
+        pred_val_y, pred_test_y, best_score = train_pred(model, X_train, y_train, X_val, y_val, epochs=5)
         train_meta[valid_idx] = pred_val_y.reshape(-1)
+        test_meta += pred_test_y.reshape(-1) / len(splits)
+
+        model = model_lstm_atten(embedding_concat)
+        pred_val_y, pred_test_y, best_score = train_pred(model, X_train, y_train, X_val, y_val, epochs=5)
+        train_meta[valid_idx] += pred_val_y.reshape(-1)
         test_meta += pred_test_y.reshape(-1) / len(splits)
 
 sub = pd.read_csv('../input/sample_submission.csv')
 sub.prediction = test_meta > 0.33
 sub.to_csv("submission.csv", index=False)
 
+train_meta = train_meta / 2
 print(f1_score(y_true=train_y, y_pred=train_meta > 0.33))

@@ -10,8 +10,8 @@ from keras.preprocessing.sequence import pad_sequences
 from keras.preprocessing.text import Tokenizer
 
 
-MAX_FEATURES = 50000
-MAX_SEQUENCE_LENGTH = 100
+MAX_FEATURES = 95000
+MAX_SEQUENCE_LENGTH = 70
 EMBEDDING_DIM = 300
 GLOVE_PATH = '../input/embeddings/glove.840B.300d/glove.840B.300d.txt'
 FAST_TEXT_PATH = '../input/embeddings/wiki-news-300d-1M/wiki-news-300d-1M.vec'

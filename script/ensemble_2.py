@@ -102,13 +102,11 @@ def load_embedding_matrix(word_index,
                 try:
                     embedding_vector = embeddings_index.get_vector(word)
                 except KeyError:
-                    embedding_vector = None
+                    pass
             else:
                 embedding_vector = embeddings_index.get(word)
             if embedding_vector is not None:
                 embedding_matrix[i] = embedding_vector
-            if embedding_vector is None:
-                embedding_matrix[i] = np.random.uniform(-0.01, 0.01, 300)
 
     return embedding_matrix
 
@@ -157,7 +155,7 @@ def build_swem(dropout_rate,
                   weights=[embedding_matrix],
                   trainable=False)(inp)
 
-    # x = SpatialDropout1D(rate=dropout_rate)(x)
+    x = SpatialDropout1D(rate=dropout_rate)(x)
     x = Dense(1200, activation="relu")(x)
 
     if pool_type == 'aver':
@@ -169,10 +167,15 @@ def build_swem(dropout_rate,
         x_max = GlobalMaxPooling1D()(x)
         x = concatenate([x_aver, x_max])
     if pool_type == 'hier':
-        x = AveragePooling1D(pool_size=3,
+        x = AveragePooling1D(pool_size=5,
                              strides=None,
                              padding='same')(x)
         x = GlobalMaxPooling1D()(x)
+    if pool_type == 'attn':
+        a = Dense(300, activation='tanh')(x)
+        a = Dense(8, activation="softmax")(a)
+        m = dot([a, x], axes=(1, 1))
+        x = Flatten()(m)
 
     x = Dense(300, activation="relu")(x)
     x = Dropout(rate=dropout_rate)(x)
@@ -195,7 +198,7 @@ def cnn_model(filters=32,
                   input_length=maxlen,
                   weights=[embedding_matrix],
                   trainable=is_embedding_trainable)(inp)
-    # x = SpatialDropout1D(0.4)(x)
+    x = SpatialDropout1D(0.2)(x)
 
     convs = []
     for kernel_size in kernel_sizes:
@@ -235,7 +238,7 @@ def fit_predict(X_train,
                 y_val,
                 X_test,
                 model,
-                epochs=5,
+                epochs=3,
                 lr=0.001,
                 batch_size=1024):
     with timer('fitting'):
@@ -249,7 +252,7 @@ def fit_predict(X_train,
             loss='binary_crossentropy',
             optimizer=optimizers.Adam(lr=lr)
         )
-        model.summary()
+        # model.summary()
         val_loss = []
         for i in range(epochs):
             model_checkpoint = ModelCheckpoint(
@@ -343,7 +346,7 @@ def main():
     gru_attn_pred_test = []
     gru_attn_pred_val = []
 
-    for _ in range(6):
+    for _ in range(3):
         gru_attn = bigru_attn_model(
             hidden_dim=40,
             dropout_rate=0.5,
@@ -352,6 +355,7 @@ def main():
             embedding_matrix=embedding_matrix
         )
 
+        print('GRU fitting')
         pred_test, pred_val = fit_predict(
             X_train=X_train,
             X_val=X_val,
@@ -370,10 +374,40 @@ def main():
         del gru_attn
         gc.collect()
 
-    '''
+    cnn_pred_test = []
+    cnn_pred_val = []
+
+    for _ in range(2):
+        cnn = cnn_model(
+            filters=40,
+            kernel_sizes=[2, 3, 4, 5],
+            input_shape=X_train.shape[1:],
+            is_embedding_trainable=True,
+            embedding_matrix=embedding_matrix
+        )
+
+        print('CNN fitting')
+        pred_test, pred_val = fit_predict(
+            X_train=X_train,
+            X_val=X_val,
+            y_train=y_train,
+            y_val=y_val,
+            X_test=X_test,
+            epochs=2,
+            model=cnn,
+            lr=0.001,
+            batch_size=1024
+        )
+
+        cnn_pred_test.append(pred_test)
+        cnn_pred_val.append(pred_val)
+
+        del cnn
+        gc.collect()
+
     swem_pred_test = []
     swem_pred_val = []
-    pool_types = ['max']
+    pool_types = ['max', 'concat', 'hier']
 
     for pool_type in pool_types:
         print('pool type: {}'.format(pool_type))
@@ -403,41 +437,11 @@ def main():
         del swem
         gc.collect()
 
-    cnn_pred_test = []
-    cnn_pred_val = []
-
-    for _ in range(1):
-        cnn = cnn_model(
-            filters=40,
-            kernel_sizes=[2, 3, 4, 5],
-            input_shape=X_train.shape[1:],
-            is_embedding_trainable=True,
-            embedding_matrix=embedding_matrix
-        )
-
-        pred_test, pred_val = fit_predict(
-            X_train=X_train,
-            X_val=X_val,
-            y_train=y_train,
-            y_val=y_val,
-            X_test=X_test,
-            epochs=2,
-            model=cnn,
-            lr=0.001,
-            batch_size=512
-        )
-
-        cnn_pred_test.append(pred_test)
-        cnn_pred_val.append(pred_val)
-
-        del cnn
-        gc.collect()
-    '''
     gru_attn_pred_val = np.array(gru_attn_pred_val).mean(axis=0)
     gru_attn_pred_test = np.array(gru_attn_pred_test).mean(axis=0)
     print("GRU ensemble")
     get_best_threshold(gru_attn_pred_val, y_val)
-    '''
+
     cnn_pred_val = np.array(cnn_pred_val).mean(axis=0)
     cnn_pred_test = np.array(cnn_pred_test).mean(axis=0)
     print("CNN ensemble")
@@ -448,16 +452,12 @@ def main():
     print("SWEM ensemble")
     get_best_threshold(swem_pred_val, y_val)
 
-    y_pred_val = (
-        0.6 * gru_attn_pred_val + 0.2 * cnn_pred_val + 0.2 * swem_pred_val
-    )
-    y_pred_test = (
-        0.6 * gru_attn_pred_test + 0.2 * cnn_pred_test + 0.2 * swem_pred_test
-    )
-    '''
+    y_pred_val = (0.4 * gru_attn_pred_val + 0.3 * cnn_pred_val + 0.3 * swem_pred_val)
+    y_pred_test = (0.4 * gru_attn_pred_test + 0.3 * cnn_pred_test + 0.3 * swem_pred_test)
+
     print("ALL ensemble")
-    threshold = get_best_threshold(gru_attn_pred_val, y_val)
-    y_pred = (np.array(gru_attn_pred_test) > threshold).astype(np.int)
+    threshold = get_best_threshold(y_pred_val, y_val)
+    y_pred = (np.array(y_pred_test) > threshold).astype(np.int)
 
     submit_df = pd.DataFrame({"qid": qid, "prediction": y_pred})
     submit_df.to_csv(

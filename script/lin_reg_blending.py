@@ -257,6 +257,14 @@ def cnn_model(filters=32,
             x = Dense(300)(x)
             embeddings.append(x)
         x = add(embeddings)
+
+    if meta_embeddings is None:
+        x = Embedding(input_dim=embedding_matrix.shape[0],
+                      output_dim=embedding_matrix.shape[1],
+                      input_length=input_shape[0],
+                      weights=[embedding_matrix],
+                      trainable=is_embedding_trainable)(inp)
+
     # x = SpatialDropout1D(0.4)(x)
 
     convs = []
@@ -326,15 +334,17 @@ def fit_predict(X_train,
                 validation_data=(X_val, y_val),
                 epochs=1,
                 # batch_size=2**(11 + i),
-                batch_size=batch_size,  # *(i + 1),
+                batch_size=batch_size * (i + 1),
                 class_weight=class_weights,
                 callbacks=[model_checkpoint],
-                verbose=2
+                verbose=0
             )
 
             val_loss.extend(hist.history['val_loss'])
 
     best_epoch_index = np.array(val_loss).argmin()
+    best_val_loss = np.array(val_loss).min()
+    print("best val_loss: {}".format(best_val_loss))
     print("best epoch: {}".format(best_epoch_index + 1))
     model.load_weights(str(best_epoch_index) + '_weight.h5')
 
@@ -371,7 +381,7 @@ def main():
     X_train, X_val, y_train, y_val = train_test_split(
         X_train,
         y_train,
-        test_size=0.1,
+        test_size=0.01,
         random_state=39
     )
 
@@ -389,15 +399,9 @@ def main():
         word_index=word_index,
         embedding_path=PARAGRAM_PATH
     )
-    '''
-    word2vec_embedding = load_embedding_matrix(
-        word_index=word_index,
-        embedding_path=WORD2VEC_PATH
-    )
-    '''
 
     embedding_matrix = [
-        glove_embedding, fast_text_embedding, paragram_embedding  # , word2vec_embedding
+        glove_embedding, fast_text_embedding, paragram_embedding
     ]
 
     y_pred_test = []
@@ -455,12 +459,58 @@ def main():
         y_pred_test.append(pred_test)
         y_pred_val.append(pred_val)
 
-    # y_pred_test = np.array(y_pred_test).mean(axis=0)
-    # y_pred_val = np.array(y_pred_val).mean(axis=0)
-    print("mean ensemble")
-    threshold = get_best_threshold(np.array(y_pred_val).mean(axis=0), y_val)
-    y_pred = (np.array(np.array(y_pred_test).mean(axis=0)) > threshold).astype(np.int)
+    cnn = cnn_model(
+        filters=40,
+        kernel_sizes=[2, 3, 4, 5],
+        input_shape=X_train.shape[1:],
+        is_embedding_trainable=True,
+        meta_embeddings=None,
+        embedding_matrix=glove_embedding
+    )
 
+    pred_test, pred_val = fit_predict(
+        X_train=X_train,
+        X_val=X_val,
+        y_train=y_train,
+        y_val=y_val,
+        X_test=X_test,
+        model=cnn,
+        lr=0.001,
+        epochs=2,
+        batch_size=512
+    )
+
+    y_pred_test.append(pred_test)
+    y_pred_val.append(pred_val)
+
+    cnn = cnn_model(
+        filters=40,
+        kernel_sizes=[2, 3, 4, 5],
+        input_shape=X_train.shape[1:],
+        is_embedding_trainable=True,
+        meta_embeddings='concat',
+        embedding_matrix=[fast_text_embedding, paragram_embedding]
+    )
+
+    pred_test, pred_val = fit_predict(
+        X_train=X_train,
+        X_val=X_val,
+        y_train=y_train,
+        y_val=y_val,
+        X_test=X_test,
+        model=cnn,
+        lr=0.001,
+        epochs=2,
+        batch_size=512
+    )
+
+    y_pred_test.append(pred_test)
+    y_pred_val.append(pred_val)
+
+    y_pred_test = np.array(y_pred_test).mean(axis=0)
+    y_pred_val = np.array(y_pred_val).mean(axis=0)
+
+    '''
     X = np.array(y_pred_val)
     reg = LinearRegression().fit(X.T, y_val)
     print(reg.score(X.T, y_val), reg.coef_)
@@ -469,8 +519,9 @@ def main():
         [y_pred_val[i] * reg.coef_[i] for i in range(len(y_pred_val))], axis=0)
     y_pred_test = np.sum(
         [y_pred_test[i] * reg.coef_[i] for i in range(len(y_pred_test))], axis=0)
+    '''
 
-    print("LinearRegression ensemble")
+    print("ALL ensemble")
     threshold = get_best_threshold(y_pred_val, y_val)
     y_pred = (np.array(y_pred_test) > threshold).astype(np.int)
 

@@ -30,7 +30,7 @@ import tensorflow as tf
 MAX_FEATURES = 95000
 MAX_SEQUENCE_LENGTH = 70
 EMBEDDING_DIM = 300
-NFOLDS = 5
+NFOLDS = 4
 GLOVE_PATH = '../input/embeddings/glove.840B.300d/glove.840B.300d.txt'
 FAST_TEXT_PATH = '../input/embeddings/wiki-news-300d-1M/wiki-news-300d-1M.vec'
 PARAGRAM_PATH = '../input/embeddings/paragram_300_sl999/paragram_300_sl999.txt'
@@ -110,7 +110,7 @@ class Attention(Layer):
         return K.sum(weighted_input, axis=1)
 
     def compute_output_shape(self, input_shape):
-        return input_shape[0],  self.features_dim
+        return input_shape[0], self.features_dim
 
 
 def load_embedding_matrix(word_index,
@@ -247,15 +247,17 @@ def model_lstm_atten(embedding_matrix):
                   weights=[embedding_matrix],
                   trainable=False)(inp)
 
+    x = SpatialDropout1D(0.1)(x)
     x = Bidirectional(CuDNNLSTM(40, return_sequences=True))(x)
-    x = Bidirectional(CuDNNGRU(40, return_sequences=True))(x)
+    y = Bidirectional(CuDNNGRU(40, return_sequences=True))(x)
 
-    atten = Attention(MAX_SEQUENCE_LENGTH)(x)
-    avg_pool = GlobalAveragePooling1D()(x)
-    max_pool = GlobalMaxPooling1D()(x)
+    atten_1 = Attention(MAX_SEQUENCE_LENGTH)(x)  # skip connect
+    atten_2 = Attention(MAX_SEQUENCE_LENGTH)(y)
+    avg_pool = GlobalAveragePooling1D()(y)
+    max_pool = GlobalMaxPooling1D()(y)
 
-    conc = concatenate([atten, avg_pool, max_pool])
-    conc = Dense(64, activation="relu")(conc)
+    conc = concatenate([atten_1, atten_2, avg_pool, max_pool])
+    conc = Dense(16, activation="relu")(conc)
     conc = Dropout(0.1)(conc)
     outp = Dense(1, activation="sigmoid")(conc)
 
@@ -288,10 +290,10 @@ def fit_predict(X_train,
                 lr=0.001,
                 batch_size=1024):
     with timer('fitting'):
-        class_weights = class_weight.compute_class_weight(
-            'balanced',
-            np.unique(y_train),
-            y_train
+        model_checkpoint = ModelCheckpoint(
+            'best.h5',
+            save_best_only=True,
+            save_weights_only=True
         )
 
         model.compile(
@@ -299,34 +301,22 @@ def fit_predict(X_train,
             optimizer=optimizers.Adam(lr=lr, clipvalue=0.5)
         )
         # model.summary()
-        val_loss = []
-        for i in range(epochs):
-            model_checkpoint = ModelCheckpoint(
-                str(i) + '_weight.h5',
-                save_best_only=True,
-                save_weights_only=True
-            )
 
-            hist = model.fit(
-                X_train,
-                y_train,
-                validation_data=(X_val, y_val),
-                epochs=1,
-                # Don't Decay the Learning Rate, Increase the Batch Size https://arxiv.org/abs/1711.00489
-                # batch_size=2**(11 + i),
-                batch_size=batch_size, # * (i + 1),
-                class_weight=class_weights,
-                callbacks=[model_checkpoint],
-                verbose=0
-            )
+        hist = model.fit(
+            X_train,
+            y_train,
+            validation_data=(X_val, y_val),
+            epochs=6,
+            batch_size=batch_size,
+            callbacks=[model_checkpoint],
+            verbose=1
+        )
 
-            val_loss.extend(hist.history['val_loss'])
-
-    best_epoch_index = np.array(val_loss).argmin()
-    best_val_loss = np.array(val_loss).min()
+    best_epoch_index = np.array(hist.history['val_loss']).argmin()
+    best_val_loss = np.array(hist.history['val_loss']).min()
     print("best val_loss: {}".format(best_val_loss))
     print("best epoch: {}".format(best_epoch_index + 1))
-    model.load_weights(str(best_epoch_index) + '_weight.h5')
+    model.load_weights('best.h5')
 
     y_pred_val = model.predict(X_val, batch_size=2048)[:, 0]
 
@@ -394,10 +384,10 @@ def main():
                 y_train=y_train,
                 y_val=y_val,
                 X_test=X_test,
-                epochs=3,
+                epochs=6,
                 model=lstm,
                 lr=0.001,
-                batch_size=1024
+                batch_size=512
             )
 
             skf_y[val_index] = pred_val

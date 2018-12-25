@@ -7,30 +7,12 @@ import pandas as pd
 import random as rn
 from gensim.models import KeyedVectors
 from keras import backend as K
-from keras import optimizers
-from keras import regularizers
+from keras import initializers, regularizers, constraints, optimizers, layers
 from keras.callbacks import Callback
 from keras.callbacks import EarlyStopping
 from keras.callbacks import ModelCheckpoint
-from keras.layers import AveragePooling1D
-from keras.layers import Bidirectional
-from keras.layers import BatchNormalization
-from keras.layers import concatenate
-from keras.layers import Concatenate
-from keras.layers import CuDNNGRU
-from keras.layers import dot
-from keras.layers import Dense
-from keras.layers import Dropout
-from keras.layers import Embedding
-from keras.layers import GlobalAveragePooling1D
-from keras.layers import GlobalMaxPooling1D
-from keras.layers import Flatten
-from keras.layers import Input
-from keras.layers import PReLU
-from keras.layers import Reshape
-from keras.layers import SpatialDropout1D
+from keras.layers import *
 from keras.models import Model
-from keras.layers import Conv1D, MaxPool1D, BatchNormalization
 from keras.preprocessing.sequence import pad_sequences
 from keras.preprocessing.text import Tokenizer
 from sklearn.metrics import f1_score
@@ -43,8 +25,8 @@ import tensorflow as tf
 # np.random.seed(42)
 # rn.seed(12345)
 
-MAX_FEATURES = 50000
-MAX_SEQUENCE_LENGTH = 100
+MAX_FEATURES = 95000
+MAX_SEQUENCE_LENGTH = 70
 EMBEDDING_DIM = 300
 GLOVE_PATH = '../input/embeddings/glove.840B.300d/glove.840B.300d.txt'
 FAST_TEXT_PATH = '../input/embeddings/wiki-news-300d-1M/wiki-news-300d-1M.vec'
@@ -56,6 +38,76 @@ def timer(name):
     t0 = time.time()
     yield
     print(f'[{name}] done in {time.time() - t0:.0f} s')
+
+
+class Attention(Layer):
+    def __init__(self, step_dim,
+                 W_regularizer=None, b_regularizer=None,
+                 W_constraint=None, b_constraint=None,
+                 bias=True, **kwargs):
+        self.supports_masking = True
+        self.init = initializers.get('glorot_uniform')
+
+        self.W_regularizer = regularizers.get(W_regularizer)
+        self.b_regularizer = regularizers.get(b_regularizer)
+
+        self.W_constraint = constraints.get(W_constraint)
+        self.b_constraint = constraints.get(b_constraint)
+
+        self.bias = bias
+        self.step_dim = step_dim
+        self.features_dim = 0
+        super(Attention, self).__init__(**kwargs)
+
+    def build(self, input_shape):
+        assert len(input_shape) == 3
+
+        self.W = self.add_weight((input_shape[-1],),
+                                 initializer=self.init,
+                                 name='{}_W'.format(self.name),
+                                 regularizer=self.W_regularizer,
+                                 constraint=self.W_constraint)
+        self.features_dim = input_shape[-1]
+
+        if self.bias:
+            self.b = self.add_weight((input_shape[1],),
+                                     initializer='zero',
+                                     name='{}_b'.format(self.name),
+                                     regularizer=self.b_regularizer,
+                                     constraint=self.b_constraint)
+        else:
+            self.b = None
+
+        self.built = True
+
+    def compute_mask(self, input, input_mask=None):
+        return None
+
+    def call(self, x, mask=None):
+        features_dim = self.features_dim
+        step_dim = self.step_dim
+
+        eij = K.reshape(K.dot(K.reshape(x, (-1, features_dim)),
+                        K.reshape(self.W, (features_dim, 1))), (-1, step_dim))
+
+        if self.bias:
+            eij += self.b
+
+        eij = K.tanh(eij)
+
+        a = K.exp(eij)
+
+        if mask is not None:
+            a *= K.cast(mask, K.floatx())
+
+        a /= K.cast(K.sum(a, axis=1, keepdims=True) + K.epsilon(), K.floatx())
+
+        a = K.expand_dims(a)
+        weighted_input = x * a
+        return K.sum(weighted_input, axis=1)
+
+    def compute_output_shape(self, input_shape):
+        return input_shape[0],  self.features_dim
 
 
 def load_embedding_matrix(word_index,
@@ -108,74 +160,68 @@ def load_embedding_matrix(word_index,
             if embedding_vector is not None:
                 embedding_matrix[i] = embedding_vector
             if embedding_vector is None:
-                embedding_matrix[i] = np.random.uniform(-0.01, 0.01, 300)
+                embedding_matrix[i] = np.random.uniform(-0.01, 0.01, EMBEDDING_DIM)
 
     return embedding_matrix
 
 
-def bigru_attn_model(hidden_dim,
-                     dropout_rate,
-                     input_shape,
-                     is_embedding_trainable=False,
-                     embedding_matrix=None):
-
+def build_gru(hidden_dim,
+              dropout_rate,
+              input_shape,
+              model_type=0,
+              is_embedding_trainable=False,
+              meta_embeddings='DME',
+              embedding_matrix=None):
     inp = Input(shape=(input_shape[0],))
-    # (MAX_SEQUENCE_LENGTH, EMBEDDING_DIM)
-    x = Embedding(input_dim=embedding_matrix.shape[0],
-                  output_dim=embedding_matrix.shape[1],
-                  input_length=input_shape[0],
-                  weights=[embedding_matrix],
-                  trainable=is_embedding_trainable)(inp)
-    # (MAX_SEQUENCE_LENGTH, hidden_dim * 2)
-    h = Bidirectional(CuDNNGRU(hidden_dim, return_sequences=True))(x)
-    # (MAX_SEQUENCE_LENGTH, hidden_dim)
-    a = Dense(hidden_dim, activation='tanh')(h)
-    # (MAX_SEQUENCE_LENGTH, 8)
-    a = Dense(8, activation="softmax")(a)
-    # (8, hidden * 2)
-    m = dot([a, h], axes=(1, 1))
-    # (8 * hidden * 2)
-    x = Flatten()(m)
-    x = Dense(8 * hidden_dim * 2, activation="relu")(x)
-    x = Dropout(dropout_rate)(x)
-    x = Dense(8 * hidden_dim * 2, activation="relu")(x)
-    x = Dropout(dropout_rate)(x)
-    x = Dense(1, activation="sigmoid")(x)
-    model = Model(inputs=inp, outputs=x)
-    return model
+    embeddings = []
+    if meta_embeddings == 'concat':
+        for weights in embedding_matrix:
+            x = Embedding(input_dim=weights.shape[0],
+                          output_dim=weights.shape[1],
+                          input_length=input_shape[0],
+                          weights=[weights],
+                          trainable=is_embedding_trainable)(inp)
+            embeddings.append(x)
+        x = Concatenate(axis=2)(embeddings)
 
+    if meta_embeddings == 'DME':
+        for weights in embedding_matrix:
+            x = Embedding(input_dim=weights.shape[0],
+                          output_dim=weights.shape[1],
+                          input_length=input_shape[0],
+                          weights=[weights],
+                          trainable=is_embedding_trainable)(inp)
+            # x = Dense(300)(x)
+            embeddings.append(x)
+        x = add(embeddings)
 
-def build_swem(dropout_rate,
-               input_shape,
-               embedding_matrix=None,
-               pool_type='max'):
+    if model_type == 0:
+        # A Structured Self-attentive Sentence Embedding https://arxiv.org/abs/1703.03130 
+        h = Bidirectional(CuDNNGRU(hidden_dim, return_sequences=True))(x)
+        a = Dense(hidden_dim, activation='tanh')(h)
+        a = Dense(8, activation="softmax")(a)
+        m = dot([a, h], axes=(1, 1))
+        x = Flatten()(m)
+        x = Dense(8 * hidden_dim * 2, activation="relu")(x)
+        x = Dropout(dropout_rate)(x)
+        x = Dense(8 * hidden_dim * 2, activation="relu")(x)
+        x = Dropout(dropout_rate)(x)
+    if model_type == 1:
+        # https://www.kaggle.com/c/jigsaw-toxic-comment-classification-challenge/discussion/52644
+        x = Bidirectional(CuDNNLSTM(40, return_sequences=True))(x)
+        x = Bidirectional(CuDNNGRU(40, return_sequences=True))(x)
+        avg_pool = GlobalAveragePooling1D()(x)
+        max_pool = GlobalMaxPooling1D()(x)
+        x = concatenate([avg_pool, max_pool])
+        x = Dense(64, activation="relu")(x)
+        x = Dropout(0.1)(x)
+    if model_type == 2:
+        x = Bidirectional(CuDNNLSTM(40, return_sequences=True))(x)
+        x = Bidirectional(CuDNNGRU(40, return_sequences=True))(x)
+        x = Attention(MAX_SEQUENCE_LENGTH)(x)
+        x = Dense(64, activation="relu")(x)
+        x = Dropout(0.1)(x)
 
-    inp = Input(shape=(input_shape[0],))
-    x = Embedding(input_dim=embedding_matrix.shape[0],
-                  output_dim=embedding_matrix.shape[1],
-                  input_length=input_shape[0],
-                  weights=[embedding_matrix],
-                  trainable=False)(inp)
-
-    # x = SpatialDropout1D(rate=dropout_rate)(x)
-    x = Dense(1200, activation="relu")(x)
-
-    if pool_type == 'aver':
-        x = GlobalAveragePooling1D()(x)
-    if pool_type == 'max':
-        x = GlobalMaxPooling1D()(x)
-    if pool_type == 'concat':
-        x_aver = GlobalAveragePooling1D()(x)
-        x_max = GlobalMaxPooling1D()(x)
-        x = concatenate([x_aver, x_max])
-    if pool_type == 'hier':
-        x = AveragePooling1D(pool_size=3,
-                             strides=None,
-                             padding='same')(x)
-        x = GlobalMaxPooling1D()(x)
-
-    x = Dense(300, activation="relu")(x)
-    x = Dropout(rate=dropout_rate)(x)
     x = Dense(1, activation="sigmoid")(x)
     model = Model(inputs=inp, outputs=x)
     return model
@@ -186,15 +232,40 @@ def cnn_model(filters=32,
               dropout_rate=0.1,
               input_shape=None,
               is_embedding_trainable=False,
+              meta_embeddings='concat',
               embedding_matrix=None):
 
     maxlen = input_shape[0]
     inp = Input(shape=(maxlen,))
-    x = Embedding(input_dim=embedding_matrix.shape[0],
-                  output_dim=embedding_matrix.shape[1],
-                  input_length=maxlen,
-                  weights=[embedding_matrix],
-                  trainable=is_embedding_trainable)(inp)
+    embeddings = []
+    if meta_embeddings == 'concat':
+        for weights in embedding_matrix:
+            x = Embedding(input_dim=weights.shape[0],
+                          output_dim=weights.shape[1],
+                          input_length=input_shape[0],
+                          weights=[weights],
+                          trainable=is_embedding_trainable)(inp)
+            embeddings.append(x)
+        x = Concatenate(axis=2)(embeddings)
+
+    if meta_embeddings == 'DME':
+        for weights in embedding_matrix:
+            x = Embedding(input_dim=weights.shape[0],
+                          output_dim=weights.shape[1],
+                          input_length=input_shape[0],
+                          weights=[weights],
+                          trainable=is_embedding_trainable)(inp)
+            x = Dense(300)(x)
+            embeddings.append(x)
+        x = add(embeddings)
+
+    if meta_embeddings is None:
+        x = Embedding(input_dim=embedding_matrix.shape[0],
+                      output_dim=embedding_matrix.shape[1],
+                      input_length=input_shape[0],
+                      weights=[embedding_matrix],
+                      trainable=is_embedding_trainable)(inp)
+
     # x = SpatialDropout1D(0.4)(x)
 
     convs = []
@@ -247,9 +318,9 @@ def fit_predict(X_train,
 
         model.compile(
             loss='binary_crossentropy',
-            optimizer=optimizers.Adam(lr=lr)
+            optimizer=optimizers.Adam(lr=lr, clipvalue=0.5)
         )
-        model.summary()
+        # model.summary()
         val_loss = []
         for i in range(epochs):
             model_checkpoint = ModelCheckpoint(
@@ -264,15 +335,17 @@ def fit_predict(X_train,
                 validation_data=(X_val, y_val),
                 epochs=1,
                 # batch_size=2**(11 + i),
-                batch_size=batch_size*(i + 1),
+                batch_size=batch_size * (i + 1),
                 class_weight=class_weights,
                 callbacks=[model_checkpoint],
-                verbose=2
+                verbose=0
             )
 
             val_loss.extend(hist.history['val_loss'])
 
     best_epoch_index = np.array(val_loss).argmin()
+    best_val_loss = np.array(val_loss).min()
+    print("best val_loss: {}".format(best_val_loss))
     print("best epoch: {}".format(best_epoch_index + 1))
     model.load_weights(str(best_epoch_index) + '_weight.h5')
 
@@ -309,7 +382,7 @@ def main():
     X_train, X_val, y_train, y_val = train_test_split(
         X_train,
         y_train,
-        test_size=0.1,
+        test_size=0.01,
         random_state=39
     )
 
@@ -328,27 +401,21 @@ def main():
         embedding_path=PARAGRAM_PATH
     )
 
-    word2vec_embedding = load_embedding_matrix(
-        word_index=word_index,
-        embedding_path=WORD2VEC_PATH
-    )
+    embedding_matrix = [
+        glove_embedding, fast_text_embedding, paragram_embedding
+    ]
 
-    embedding_matrix = np.concatenate((
-        glove_embedding, fast_text_embedding, paragram_embedding, word2vec_embedding
-    ), axis=1)
+    y_pred_test = []
+    y_pred_val = []
 
-    del glove_embedding, fast_text_embedding, paragram_embedding, word2vec_embedding
-    gc.collect()
-
-    gru_attn_pred_test = []
-    gru_attn_pred_val = []
-
-    for _ in range(6):
-        gru_attn = bigru_attn_model(
+    for i in range(6):
+        gru = build_gru(
             hidden_dim=40,
-            dropout_rate=0.5,
+            dropout_rate=0.1,
             input_shape=X_train.shape[1:],
+            model_type=i % 3,
             is_embedding_trainable=False,
+            meta_embeddings='concat',
             embedding_matrix=embedding_matrix
         )
 
@@ -359,59 +426,22 @@ def main():
             y_val=y_val,
             X_test=X_test,
             epochs=3,
-            model=gru_attn,
+            model=gru,
             lr=0.001,
             batch_size=1024
         )
 
-        gru_attn_pred_test.append(pred_test)
-        gru_attn_pred_val.append(pred_val)
+        y_pred_test.append(pred_test)
+        y_pred_val.append(pred_val)
 
-        del gru_attn
-        gc.collect()
-
-    '''
-    swem_pred_test = []
-    swem_pred_val = []
-    pool_types = ['max']
-
-    for pool_type in pool_types:
-        print('pool type: {}'.format(pool_type))
-
-        swem = build_swem(
-            dropout_rate=0.1,
-            input_shape=X_train.shape[1:],
-            embedding_matrix=embedding_matrix,
-            pool_type=pool_type
-        )
-
-        print('SWEM fitting')
-        pred_test, pred_val = fit_predict(
-            X_train=X_train,
-            X_val=X_val,
-            y_train=y_train,
-            y_val=y_val,
-            X_test=X_test,
-            model=swem,
-            epochs=3,
-            batch_size=1024
-        )
-
-        swem_pred_test.append(pred_test)
-        swem_pred_val.append(pred_val)
-
-        del swem
-        gc.collect()
-
-    cnn_pred_test = []
-    cnn_pred_val = []
-
-    for _ in range(1):
+    print('CNN fitting')
+    for _ in range(2):
         cnn = cnn_model(
             filters=40,
             kernel_sizes=[2, 3, 4, 5],
             input_shape=X_train.shape[1:],
             is_embedding_trainable=True,
+            meta_embeddings='concat',
             embedding_matrix=embedding_matrix
         )
 
@@ -421,43 +451,69 @@ def main():
             y_train=y_train,
             y_val=y_val,
             X_test=X_test,
-            epochs=2,
             model=cnn,
             lr=0.001,
+            epochs=1,
             batch_size=512
         )
 
-        cnn_pred_test.append(pred_test)
-        cnn_pred_val.append(pred_val)
+        y_pred_test.append(pred_test)
+        y_pred_val.append(pred_val)
 
-        del cnn
-        gc.collect()
-    '''
-    gru_attn_pred_val = np.array(gru_attn_pred_val).mean(axis=0)
-    gru_attn_pred_test = np.array(gru_attn_pred_test).mean(axis=0)
-    print("GRU ensemble")
-    get_best_threshold(gru_attn_pred_val, y_val)
-    '''
-    cnn_pred_val = np.array(cnn_pred_val).mean(axis=0)
-    cnn_pred_test = np.array(cnn_pred_test).mean(axis=0)
-    print("CNN ensemble")
-    get_best_threshold(cnn_pred_val, y_val)
-
-    swem_pred_val = np.array(swem_pred_val).mean(axis=0)
-    swem_pred_test = np.array(swem_pred_test).mean(axis=0)
-    print("SWEM ensemble")
-    get_best_threshold(swem_pred_val, y_val)
-
-    y_pred_val = (
-        0.6 * gru_attn_pred_val + 0.2 * cnn_pred_val + 0.2 * swem_pred_val
+    cnn = cnn_model(
+        filters=40,
+        kernel_sizes=[2, 3, 4, 5],
+        input_shape=X_train.shape[1:],
+        is_embedding_trainable=True,
+        meta_embeddings=None,
+        embedding_matrix=glove_embedding
     )
-    y_pred_test = (
-        0.6 * gru_attn_pred_test + 0.2 * cnn_pred_test + 0.2 * swem_pred_test
+
+    pred_test, pred_val = fit_predict(
+        X_train=X_train,
+        X_val=X_val,
+        y_train=y_train,
+        y_val=y_val,
+        X_test=X_test,
+        model=cnn,
+        lr=0.001,
+        epochs=2,
+        batch_size=512
     )
-    '''
+
+    y_pred_test.append(pred_test)
+    y_pred_val.append(pred_val)
+
+    cnn = cnn_model(
+        filters=40,
+        kernel_sizes=[2, 3, 4, 5],
+        input_shape=X_train.shape[1:],
+        is_embedding_trainable=True,
+        meta_embeddings='concat',
+        embedding_matrix=[fast_text_embedding, paragram_embedding]
+    )
+
+    pred_test, pred_val = fit_predict(
+        X_train=X_train,
+        X_val=X_val,
+        y_train=y_train,
+        y_val=y_val,
+        X_test=X_test,
+        model=cnn,
+        lr=0.001,
+        epochs=2,
+        batch_size=512
+    )
+
+    y_pred_test.append(pred_test)
+    y_pred_val.append(pred_val)
+
+    y_pred_test = np.array(y_pred_test).mean(axis=0)
+    y_pred_val = np.array(y_pred_val).mean(axis=0)
+
     print("ALL ensemble")
-    threshold = get_best_threshold(gru_attn_pred_val, y_val)
-    y_pred = (np.array(gru_attn_pred_test) > threshold).astype(np.int)
+    threshold = get_best_threshold(y_pred_val, y_val)
+    y_pred = (np.array(y_pred_test) > threshold).astype(np.int)
 
     submit_df = pd.DataFrame({"qid": qid, "prediction": y_pred})
     submit_df.to_csv(
