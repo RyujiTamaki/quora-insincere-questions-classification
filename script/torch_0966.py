@@ -20,8 +20,8 @@ import tensorflow as tf
 max_features = 95000
 maxlen = 70
 embed_size = 300
-batch_size = 512
-n_epochs = 4
+batch_size = 145
+n_epochs = 3
 NFOLDS = 5
 GLOVE_PATH = '../input/embeddings/glove.840B.300d/glove.840B.300d.txt'
 FAST_TEXT_PATH = '../input/embeddings/wiki-news-300d-1M/wiki-news-300d-1M.vec'
@@ -170,7 +170,6 @@ class NeuralNet(nn.Module):
     def __init__(self,
                  dropout_rate=0.1,
                  lstm_hidden_size=40,
-                 hidden_size_1=320,
                  last_hidden_size=16,
                  embedding_matrix=None):
         super(NeuralNet, self).__init__()
@@ -186,7 +185,7 @@ class NeuralNet(nn.Module):
         self.lstm_attention = Attention(lstm_hidden_size * 2, maxlen)
         self.gru_attention = Attention(lstm_hidden_size * 2, maxlen)
 
-        self.linear = nn.Linear(hidden_size_1, last_hidden_size)
+        self.linear = nn.Linear(lstm_hidden_size * 8, last_hidden_size)
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(dropout_rate)
         self.out = nn.Linear(last_hidden_size, 1)
@@ -216,8 +215,6 @@ class NeuralNet(nn.Module):
 
 
 def main():
-    seed_torch()
-
     with timer('load data'):
         train_df = pd.read_csv("../input/train.csv")
         test_df = pd.read_csv("../input/test.csv")
@@ -252,6 +249,8 @@ def main():
     train_preds = np.zeros((len(train_df)))
     test_preds = np.zeros((len(test_df)))
 
+    seed_torch()
+
     x_test_cuda = torch.tensor(X_test, dtype=torch.long).cuda()
     test = torch.utils.data.TensorDataset(x_test_cuda)
     test_loader = torch.utils.data.DataLoader(test, batch_size=batch_size, shuffle=False)
@@ -263,10 +262,15 @@ def main():
             x_val_fold = torch.tensor(X_train[valid_idx], dtype=torch.long).cuda()
             y_val_fold = torch.tensor(y_train[valid_idx, np.newaxis], dtype=torch.float32).cuda()
 
-            model = NeuralNet(embedding_matrix=embedding_matrix)
+            model = NeuralNet(
+                dropout_rate=0.09447228172786953,
+                lstm_hidden_size=102,
+                last_hidden_size=26,
+                embedding_matrix=embedding_matrix
+            )
             model.cuda()
             loss_fn = torch.nn.BCEWithLogitsLoss(reduction='sum')
-            optimizer = torch.optim.Adam(model.parameters())
+            optimizer = torch.optim.Adam(model.parameters(), lr=0.0005089749049450687, weight_decay=1.1219048364147381e-10)
 
             train = torch.utils.data.TensorDataset(x_train_fold, y_train_fold)
             valid = torch.utils.data.TensorDataset(x_val_fold, y_val_fold)
@@ -295,15 +299,19 @@ def main():
                 test_preds_fold = np.zeros((len(test_df)))
 
                 avg_val_loss = 0.
+                avg_f1 = 0.
                 for i, (x_batch, y_batch) in enumerate(valid_loader):
                     y_pred = model(x_batch).detach()
+                    y_proba = sigmoid(y_pred.cpu().numpy())[:, 0]
+                    search_result = threshold_search(y_batch.cpu().numpy(), y_proba)
+                    avg_f1 += search_result['f1'] / len(valid_loader)
 
                     avg_val_loss += loss_fn(y_pred, y_batch).item() / len(valid_loader)
-                    valid_preds_fold[i * batch_size:(i + 1) * batch_size] = sigmoid(y_pred.cpu().numpy())[:, 0]
+                    valid_preds_fold[i * batch_size:(i + 1) * batch_size] = y_proba
 
                 elapsed_time = time.time() - start_time
-                print('Epoch {}/{} \t loss={:.4f} \t val_loss={:.4f} \t time={:.2f}s'.format(
-                    epoch + 1, n_epochs, avg_loss, avg_val_loss, elapsed_time))
+                print('Epoch {}/{} \t loss={:.4f} \t val_loss={:.4f} \t f1={:.4f} \t time={:.2f}s'.format(
+                    epoch + 1, n_epochs, avg_loss, avg_val_loss, avg_f1, elapsed_time))
 
             for i, (x_batch,) in enumerate(test_loader):
                 y_pred = model(x_batch).detach()
