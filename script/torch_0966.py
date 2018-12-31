@@ -1,6 +1,5 @@
 # standard imports
 import time
-from IPython.display import display
 import numpy as np
 import pandas as pd
 
@@ -15,7 +14,7 @@ from keras.preprocessing.sequence import pad_sequences
 
 # cross validation and metrics
 from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import f1_score
+from sklearn.metrics import roc_curve, precision_recall_curve
 
 # progress bars
 from tqdm import tqdm
@@ -125,15 +124,17 @@ def seed_torch(seed=1234):
     torch.backends.cudnn.deterministic = True
 
 
-def threshold_search(y_true, y_proba):
-    best_threshold = 0
-    best_score = 0
-    for threshold in tqdm([i * 0.01 for i in range(100)]):
-        score = f1_score(y_true=y_true, y_pred=y_proba > threshold)
-        if score > best_score:
-            best_threshold = threshold
-            best_score = score
-    search_result = {'threshold': best_threshold, 'f1': best_score}
+def threshold_search(y_true, y_proba, plot=False):
+    precision, recall, thresholds = precision_recall_curve(y_true, y_proba)
+    thresholds = np.append(thresholds, 1.001)
+    F = 2 / (1 / precision + 1 / recall)
+    best_score = np.max(F)
+    best_th = thresholds[np.argmax(F)]
+    if plot:
+        plt.plot(thresholds, F, '-b')
+        plt.plot([best_th], [best_score], '*r')
+        plt.show()
+    search_result = {'threshold': best_th, 'f1': best_score}
     return search_result
 
 
@@ -141,83 +142,65 @@ def sigmoid(x):
     return 1 / (1 + np.exp(-x))
 
 
-puncts = [',', '.', '"', ':', ')', '(', '-', '!', '?', '|', ';', "'", '$', '&', '/', '[', ']', '>', '%', '=', '#', '*', '+', '\\', '•',  '~', '@', '£', 
- '·', '_', '{', '}', '©', '^', '®', '`',  '<', '→', '°', '€', '™', '›',  '♥', '←', '×', '§', '″', '′', 'Â', '█', '½', 'à', '…', 
- '“', '★', '”', '–', '●', 'â', '►', '−', '¢', '²', '¬', '░', '¶', '↑', '±', '¿', '▾', '═', '¦', '║', '―', '¥', '▓', '—', '‹', '─', 
- '▒', '：', '¼', '⊕', '▼', '▪', '†', '■', '’', '▀', '¨', '▄', '♫', '☆', 'é', '¯', '♦', '¤', '▲', 'è', '¸', '¾', 'Ã', '⋅', '‘', '∞', 
- '∙', '）', '↓', '、', '│', '（', '»', '，', '♪', '╩', '╚', '³', '・', '╦', '╣', '╔', '╗', '▬', '❤', 'ï', 'Ø', '¹', '≤', '‡', '√', ]
-
-
-def clean_text(x):
-    x = str(x)
-    for punct in puncts:
-        x = x.replace(punct, f' {punct} ')
+def clean_text(x, maxlen=None):
+    puncts = [
+        ',', '.', '"', ':', ')', '(', '-', '!', '?', '|', ';', "'", '$', '&', '/', '[', ']', '>', '%', '=', '#', '*', '+', '\\', '•', '~', '@', '£',
+        '·', '_', '{', '}', '©', '^', '®', '`', '<', '→', '°', '€', '™', '›',  '♥', '←', '×', '§', '″', '′', 'Â', '█', '½', 'à', '…',
+        '“', '★', '”', '–', '●', 'â', '►', '−', '¢', '²', '¬', '░', '¶', '↑', '±', '¿', '▾', '═', '¦', '║', '―', '¥', '▓', '—', '‹', '─',
+        '▒', '：', '¼', '⊕', '▼', '▪', '†', '■', '’', '▀', '¨', '▄', '♫', '☆', 'é', '¯', '♦', '¤', '▲', 'è', '¸', '¾', 'Ã', '⋅', '‘', '∞',
+        '∙', '）', '↓', '、', '│', '（', '»', '，', '♪', '╩', '╚', '³', '・', '╦', '╣', '╔', '╗', '▬', '❤', 'ï', 'Ø', '¹', '≤', '‡', '√',
+    ]
+    x = x.lower()
+    for punct in puncts[:maxlen]:
+        if punct in x:  # add this line
+            x = x.replace(punct, f' {punct} ')
     return x
 
 
-def load_glove(word_index):
+def load_glove(word_index, max_words=200000, embed_size=300):
     EMBEDDING_FILE = '../input/embeddings/glove.840B.300d/glove.840B.300d.txt'
-
-    def get_coefs(word, *arr):
-        return word, np.asarray(arr, dtype='float32')[:300]
-
-    embeddings_index = dict(get_coefs(*o.split(" ")) for o in open(EMBEDDING_FILE))
-
-    all_embs = np.stack(embeddings_index.values())
     emb_mean, emb_std = -0.005838499, 0.48782197
-    embed_size = all_embs.shape[1]
 
-    # word_index = tokenizer.word_index
-    nb_words = min(max_features, len(word_index))
-    embedding_matrix = np.random.normal(emb_mean, emb_std, (nb_words, embed_size))
-
-    for word, i in word_index.items():
-        if i >= max_features:
-            continue
-        embedding_vector = embeddings_index.get(word)
-        if embedding_vector is not None:
-            embedding_matrix[i] = embedding_vector
-
+    embedding_matrix = np.random.normal(emb_mean, emb_std, (max_words, embed_size))
+    with open(EMBEDDING_FILE, 'r', encoding="utf8") as f:
+        for line in f:
+            word, vec = line.split(' ', 1)
+            if word not in word_index:
+                continue
+            i = word_index[word]
+            if i >= max_words:
+                continue
+            embedding_vector = np.asarray(vec.split(' '), dtype='float32')[:300]
+            if len(embedding_vector) == 300:
+                embedding_matrix[i] = embedding_vector
     return embedding_matrix
 
 
-def load_para(word_index):
+def load_para(word_index, max_words=200000, embed_size=300):
     EMBEDDING_FILE = '../input/embeddings/paragram_300_sl999/paragram_300_sl999.txt'
-
-    def get_coefs(word, *arr):
-        return word, np.asarray(arr, dtype='float32')
-
-    embeddings_index = dict(get_coefs(*o.split(" ")) for o in open(EMBEDDING_FILE, encoding="utf8", errors='ignore') if len(o)>100)
-
-    all_embs = np.stack(embeddings_index.values())
     emb_mean, emb_std = -0.0053247833, 0.49346462
-    embed_size = all_embs.shape[1]
 
-    # word_index = tokenizer.word_index
-    nb_words = min(max_features, len(word_index))
-    embedding_matrix = np.random.normal(emb_mean, emb_std, (nb_words, embed_size))
-    for word, i in word_index.items():
-        if i >= max_features:
-            continue
-        embedding_vector = embeddings_index.get(word)
-        if embedding_vector is not None:
-            embedding_matrix[i] = embedding_vector
+    embedding_matrix = np.random.normal(emb_mean, emb_std, (max_words, embed_size))
+    with open(EMBEDDING_FILE, 'r', encoding="utf8", errors='ignore') as f:
+        for line in f:
+            word, vec = line.split(' ', 1)
+            if word not in word_index:
+                continue
+            i = word_index[word]
+            if i >= max_words:
+                continue
+            embedding_vector = np.asarray(vec.split(' '), dtype='float32')[:300]
+            if len(embedding_vector) == 300:
+                embedding_matrix[i] = embedding_vector
 
     return embedding_matrix
 
 
 train_df = pd.read_csv("../input/train.csv")
 test_df = pd.read_csv("../input/test.csv")
-print('Train data dimension: ', train_df.shape)
-display(train_df.head())
-print('Test data dimension: ', test_df.shape)
-display(test_df.head())
 
-train_df["question_text"] = train_df["question_text"].str.lower()
-test_df["question_text"] = test_df["question_text"].str.lower()
-
-train_df["question_text"] = train_df["question_text"].apply(lambda x: clean_text(x))
-test_df["question_text"] = test_df["question_text"].apply(lambda x: clean_text(x))
+train_df["question_text"] = train_df["question_text"].apply(lambda x: clean_text(x, maxlen=maxlen))
+test_df["question_text"] = test_df["question_text"].apply(lambda x: clean_text(x, maxlen=maxlen))
 
 # fill up the missing values
 x_train = train_df["question_text"].fillna("_##_").values
@@ -229,26 +212,20 @@ tokenizer.fit_on_texts(list(x_train))
 x_train = tokenizer.texts_to_sequences(x_train)
 x_test = tokenizer.texts_to_sequences(x_test)
 
-# Pad the sentences
 x_train = pad_sequences(x_train, maxlen=maxlen)
 x_test = pad_sequences(x_test, maxlen=maxlen)
 
-# Get the target values
 y_train = train_df['target'].values
 
-glove_embeddings = load_glove(tokenizer.word_index)
-paragram_embeddings = load_para(tokenizer.word_index)
+glove_embeddings = load_glove(tokenizer.word_index, len(tokenizer.word_index) + 1)
+paragram_embeddings = load_para(tokenizer.word_index, len(tokenizer.word_index) + 1)
 
 embedding_matrix = np.mean([glove_embeddings, paragram_embeddings], axis=0)
 np.shape(embedding_matrix)
 
 splits = list(StratifiedKFold(n_splits=5, shuffle=True, random_state=10).split(x_train, y_train))
-# matrix for the out-of-fold predictions
 train_preds = np.zeros((len(train_df)))
-# matrix for the predictions on the test set
 test_preds = np.zeros((len(test_df)))
-
-# always call this before training for deterministic results
 seed_torch()
 
 x_test_cuda = torch.tensor(x_test, dtype=torch.long).cuda()
@@ -256,9 +233,9 @@ test = torch.utils.data.TensorDataset(x_test_cuda)
 test_loader = torch.utils.data.DataLoader(test, batch_size=batch_size, shuffle=False)
 
 for i, (train_idx, valid_idx) in enumerate(splits):
-    x_train_fold = torch.tensor(X_train[train_idx], dtype=torch.long).cuda()
+    x_train_fold = torch.tensor(x_train[train_idx], dtype=torch.long).cuda()
     y_train_fold = torch.tensor(y_train[train_idx, np.newaxis], dtype=torch.float32).cuda()
-    x_val_fold = torch.tensor(X_train[valid_idx], dtype=torch.long).cuda()
+    x_val_fold = torch.tensor(x_train[valid_idx], dtype=torch.long).cuda()
     y_val_fold = torch.tensor(y_train[valid_idx, np.newaxis], dtype=torch.float32).cuda()
 
     model = NeuralNet()
