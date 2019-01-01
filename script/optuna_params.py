@@ -16,12 +16,12 @@ import optuna
 max_features = 95000
 maxlen = 70
 embed_size = 300
-n_epochs = 4
+n_epochs = 2
 
 loss_fn = torch.nn.BCEWithLogitsLoss(reduction='sum')
 
-glove_embedding = joblib.load('../input/glove_embedding.joblib')
-paragram_embedding = joblib.load('../input/paragram_embedding.joblib')
+glove_embedding = joblib.load('../input/glove_embeddings.joblib')
+paragram_embedding = joblib.load('../input/paragram_embeddings.joblib')
 embedding_matrix = np.mean([glove_embedding, paragram_embedding], axis=0)
 
 
@@ -138,8 +138,8 @@ class NeuralNet(nn.Module):
 
 
 def create_model(trial):
-    lstm_hidden_size = int(trial.suggest_loguniform('lstm_hidden_size', 16, 512))
-    last_hidden_size = int(trial.suggest_loguniform('last_hidden_size', 4, 128))
+    lstm_hidden_size = int(trial.suggest_loguniform('lstm_hidden_size', 16, 256))
+    last_hidden_size = int(trial.suggest_loguniform('last_hidden_size', 4, 64))
     dropout_rate = trial.suggest_uniform('dropout_rate', 0.0, 0.5)
 
     model = NeuralNet(
@@ -190,13 +190,13 @@ def test_model(model, test_loader):
 
 def objective(trial):
     # dataset
-    X_train = joblib.load('../input/X_train.joblib')
+    X_train = joblib.load('../input/x_train.joblib')
     y_train = joblib.load('../input/y_train.joblib')
 
     X_train, X_test, y_train, y_test = train_test_split(
         X_train,
         y_train,
-        test_size=0.25,
+        test_size=0.20,
         random_state=39
     )
 
@@ -238,8 +238,8 @@ def objective(trial):
 
 def main():
     seed_torch()
-    study = optuna.create_study()
-    study.optimize(objective, n_trials=100)
+    study = optuna.create_study(study_name='distributed-opt-0.20split', storage='sqlite:///quora.db', load_if_exists=True)
+    study.optimize(objective, n_trials=30)
 
     print('Number of finished trials: ', len(study.trials))
 
