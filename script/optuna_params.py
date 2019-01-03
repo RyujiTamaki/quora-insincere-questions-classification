@@ -33,14 +33,13 @@ def seed_torch(seed=1234):
 
 
 def threshold_search(y_true, y_proba):
-    best_threshold = 0
-    best_score = 0
-    for threshold in [i * 0.01 for i in range(100)]:
-        score = f1_score(y_true=y_true, y_pred=y_proba > threshold)
-        if score > best_score:
-            best_threshold = threshold
-            best_score = score
-    search_result = {'threshold': best_threshold, 'f1': best_score}
+    args = np.argsort(y_proba)
+    tp = y_true.sum()
+    fs = (tp - np.cumsum(y_true[args[:-1]])) / np.arange(y_true.shape[0] + tp - 1, tp, -1)
+    res_idx = np.argmax(fs)
+    best_th = (y_proba[args[res_idx]] + y_proba[args[res_idx + 1]]) / 2
+    best_score = 2 * fs[res_idx]
+    search_result = {'threshold': best_th, 'f1': best_score}
     return search_result
 
 
@@ -217,11 +216,13 @@ def objective(trial):
     model = create_model(trial)
     optimizer = get_optimizer(trial, model)
     f1_scores = []
+    val_losses = []
 
     for step in range(n_epochs):
         start_time = time.time()
         avg_loss = train_model(model, train_loader, optimizer)
         avg_val_loss, avg_f1 = test_model(model, test_loader)
+        val_losses.append(avg_val_loss)
         f1_scores.append(avg_f1)
 
         trial.report(avg_val_loss, step)
@@ -233,12 +234,12 @@ def objective(trial):
         print('Epoch {}/{} \t loss={:.4f} \t val_loss={:.4f} \t f1={:.4f} \t time={:.2f}s'.format(
             step + 1, n_epochs, avg_loss, avg_val_loss, avg_f1, elapsed_time))
 
-    return 1 - max(f1_scores)
+    return min(val_losses)
 
 
 def main():
     seed_torch()
-    study = optuna.create_study(study_name='distributed-opt-0.20split', storage='sqlite:///quora.db', load_if_exists=True)
+    study = optuna.create_study(study_name='distributed-opt-loss', storage='sqlite:///quora.db', load_if_exists=True)
     study.optimize(objective, n_trials=30)
 
     print('Number of finished trials: ', len(study.trials))
