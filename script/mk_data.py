@@ -3,38 +3,16 @@ import time
 import numpy as np
 import pandas as pd
 
-# pytorch imports
-import torch
-import torch.nn as nn
-import torch.utils.data
-
 # imports for preprocessing the questions
 from keras.preprocessing.text import Tokenizer
 from keras.preprocessing.sequence import pad_sequences
-
-# cross validation and metrics
-from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import roc_curve, precision_recall_curve
-
-# progress bars
-from tqdm import tqdm
-tqdm.pandas()
 
 import joblib
 
 
 embed_size = 300  # how big is each word vector
-max_features = 95000  # how many unique words to use (i.e num rows in embedding vector)
+max_features = 110000  # how many unique words to use (i.e num rows in embedding vector)
 maxlen = 70  # max number of words in a question to use
-batch_size = 512  # how many samples to process at once
-n_epochs = 6  # how many times to iterate over all samples
-
-
-def seed_torch(seed=1234):
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.backends.cudnn.deterministic = True
 
 
 def clean_text(x, maxlen=None):
@@ -115,8 +93,8 @@ y_train = train_df['target'].values
 glove_embeddings = load_glove(tokenizer.word_index, len(tokenizer.word_index) + 1)
 paragram_embeddings = load_para(tokenizer.word_index, len(tokenizer.word_index) + 1)
 
-joblib.dump(x_train, '../input/x_train.joblib')
-joblib.dump(y_train, '../input/y_train.joblib')
-joblib.dump(x_test, '../input/x_test.joblib')
-joblib.dump(glove_embeddings, '../input/glove_embeddings.joblib')
-joblib.dump(paragram_embeddings, '../input/paragram_embeddings.joblib')
+joblib.dump(x_train, '../input/x_train_max_features-110000.joblib')
+joblib.dump(y_train, '../input/y_train_max_features-110000.joblib')
+joblib.dump(x_test, '../input/x_test_max_features-110000.joblib')
+joblib.dump(glove_embeddings, '../input/glove_embeddings_max_features-110000.joblib')
+joblib.dump(paragram_embeddings, '../input/paragram_embeddings_max_features-110000.joblib')
