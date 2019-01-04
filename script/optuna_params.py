@@ -16,7 +16,7 @@ import optuna
 max_features = 95000
 maxlen = 70
 embed_size = 300
-n_epochs = 6
+n_epochs = 4
 
 loss_fn = torch.nn.BCEWithLogitsLoss(reduction='sum')
 
@@ -245,7 +245,7 @@ def objective(trial):
 
 def main():
     seed_torch()
-    study = optuna.create_study(study_name='opt-auc-batch_size-512', storage='sqlite:///quora.db', load_if_exists=True)
+    study = optuna.create_study(study_name='opt-auc-epoch-4', storage='sqlite:///quora.db', load_if_exists=True)
     study.optimize(objective, n_trials=30)
 
     print('Number of finished trials: ', len(study.trials))
