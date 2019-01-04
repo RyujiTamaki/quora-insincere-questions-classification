@@ -9,14 +9,14 @@ import torch
 import torch.nn as nn
 import torch.utils.data
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import f1_score
+from sklearn.metrics import roc_auc_score
 
 import optuna
 
 max_features = 95000
 maxlen = 70
 embed_size = 300
-n_epochs = 2
+n_epochs = 6
 
 loss_fn = torch.nn.BCEWithLogitsLoss(reduction='sum')
 
@@ -175,16 +175,18 @@ def test_model(model, test_loader):
     model.eval()
     avg_val_loss = 0.
     avg_f1 = 0.
+    avg_auc = 0.
     with torch.no_grad():
         for x_batch, y_batch in test_loader:
             y_pred = model(x_batch).detach()
             avg_val_loss += loss_fn(y_pred, y_batch).item() / len(test_loader)
 
-            y_proba = sigmoid(y_pred.cpu().numpy())
+            y_proba = sigmoid(y_pred.cpu().numpy())[:, 0]
             search_result = threshold_search(y_batch.cpu().numpy(), y_proba)
             avg_f1 += search_result['f1'] / len(test_loader)
+            avg_auc += roc_auc_score(y_batch.cpu().numpy(), y_proba) / len(test_loader)
 
-    return avg_val_loss, avg_f1
+    return avg_val_loss, avg_f1, avg_auc
 
 
 def objective(trial):
@@ -196,6 +198,7 @@ def objective(trial):
         X_train,
         y_train,
         test_size=0.20,
+        stratify=y_train,
         random_state=39
     )
 
@@ -207,7 +210,8 @@ def objective(trial):
     train = torch.utils.data.TensorDataset(x_train_tensor, y_train_tensor)
     test = torch.utils.data.TensorDataset(x_test_tensor, y_test_tensor)
 
-    batch_size = int(trial.suggest_categorical('batch_size', [64, 128, 256, 512, 1024]))
+    # batch_size = int(trial.suggest_categorical('batch_size', [64, 128, 256, 512, 1024]))
+    batch_size = 512
 
     train_loader = torch.utils.data.DataLoader(train, batch_size=batch_size, shuffle=True)
     test_loader = torch.utils.data.DataLoader(test, batch_size=batch_size, shuffle=False)
@@ -217,13 +221,15 @@ def objective(trial):
     optimizer = get_optimizer(trial, model)
     f1_scores = []
     val_losses = []
+    auc_scores = []
 
     for step in range(n_epochs):
         start_time = time.time()
         avg_loss = train_model(model, train_loader, optimizer)
-        avg_val_loss, avg_f1 = test_model(model, test_loader)
+        avg_val_loss, avg_f1, avg_auc = test_model(model, test_loader)
         val_losses.append(avg_val_loss)
         f1_scores.append(avg_f1)
+        auc_scores.append(avg_auc)
 
         trial.report(avg_val_loss, step)
 
@@ -231,15 +237,15 @@ def objective(trial):
             raise optuna.structs.TrialPruned()
 
         elapsed_time = time.time() - start_time
-        print('Epoch {}/{} \t loss={:.4f} \t val_loss={:.4f} \t f1={:.4f} \t time={:.2f}s'.format(
-            step + 1, n_epochs, avg_loss, avg_val_loss, avg_f1, elapsed_time))
+        print('Epoch {}/{} \t loss={:.4f} \t val_loss={:.4f} \t f1={:.4f} \t auc={:.4f} \t time={:.2f}s'.format(
+            step + 1, n_epochs, avg_loss, avg_val_loss, avg_f1, avg_auc, elapsed_time))
 
-    return min(val_losses)
+    return 1 - max(auc_scores)
 
 
 def main():
     seed_torch()
-    study = optuna.create_study(study_name='distributed-opt-loss', storage='sqlite:///quora.db', load_if_exists=True)
+    study = optuna.create_study(study_name='opt-auc-batch_size-512', storage='sqlite:///quora.db', load_if_exists=True)
     study.optimize(objective, n_trials=30)
 
     print('Number of finished trials: ', len(study.trials))
