@@ -240,13 +240,13 @@ def objective(trial):
         print('Epoch {}/{} \t loss={:.4f} \t val_loss={:.4f} \t f1={:.4f} \t auc={:.4f} \t time={:.2f}s'.format(
             step + 1, n_epochs, avg_loss, avg_val_loss, avg_f1, avg_auc, elapsed_time))
 
-    return 1 - max(auc_scores)
+    return min(val_losses)
 
 
 def main():
     seed_torch()
-    study = optuna.create_study(study_name='opt-auc-epoch-4', storage='sqlite:///quora.db', load_if_exists=True)
-    study.optimize(objective, n_trials=30)
+    study = optuna.create_study(study_name='opt-loss-epoch-4', storage='sqlite:///quora.db', load_if_exists=True)
+    study.optimize(objective, n_trials=100)
 
     print('Number of finished trials: ', len(study.trials))
 
