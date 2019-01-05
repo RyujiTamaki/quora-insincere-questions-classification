@@ -11,7 +11,7 @@ import joblib
 
 
 embed_size = 300  # how big is each word vector
-max_features = 110000  # how many unique words to use (i.e num rows in embedding vector)
+max_features = 95000  # how many unique words to use (i.e num rows in embedding vector)
 maxlen = 70  # max number of words in a question to use
 
 
@@ -81,20 +81,15 @@ x_test = test_df["question_text"].fillna("_##_").values
 
 # Tokenize the sentences
 tokenizer = Tokenizer(num_words=max_features)
-tokenizer.fit_on_texts(list(x_train))
+tokenizer.fit_on_texts(list(x_train) + list(x_test))
 x_train = tokenizer.texts_to_sequences(x_train)
-x_test = tokenizer.texts_to_sequences(x_test)
-
 x_train = pad_sequences(x_train, maxlen=maxlen)
-x_test = pad_sequences(x_test, maxlen=maxlen)
-
 y_train = train_df['target'].values
 
 glove_embeddings = load_glove(tokenizer.word_index, len(tokenizer.word_index) + 1)
 paragram_embeddings = load_para(tokenizer.word_index, len(tokenizer.word_index) + 1)
 
-joblib.dump(x_train, '../input/x_train_max_features-110000.joblib')
-joblib.dump(y_train, '../input/y_train_max_features-110000.joblib')
-joblib.dump(x_test, '../input/x_test_max_features-110000.joblib')
-joblib.dump(glove_embeddings, '../input/glove_embeddings_max_features-110000.joblib')
-joblib.dump(paragram_embeddings, '../input/paragram_embeddings_max_features-110000.joblib')
+joblib.dump(x_train, '../input/x_train_max_features-95000_add_test.joblib')
+joblib.dump(y_train, '../input/y_train_max_features-95000_add_test.joblib')
+joblib.dump(glove_embeddings, '../input/glove_embeddings_max_features-95000_add_test.joblib')
+joblib.dump(paragram_embeddings, '../input/paragram_embeddings_max_features-95000_add_test.joblib')
