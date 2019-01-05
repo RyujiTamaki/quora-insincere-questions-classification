@@ -24,8 +24,8 @@ tqdm.pandas()
 embed_size = 300  # how big is each word vector
 max_features = 95000  # how many unique words to use (i.e num rows in embedding vector)
 maxlen = 70  # max number of words in a question to use
-batch_size = 64  # how many samples to process at once
-n_epochs = 2  # how many times to iterate over all samples
+batch_size = 512  # how many samples to process at once
+n_epochs = 4  # how many times to iterate over all samples
 
 
 class Attention(nn.Module):
@@ -72,9 +72,9 @@ class Attention(nn.Module):
 
 class NeuralNet(nn.Module):
     def __init__(self,
-                 dropout_rate=0.1,
-                 lstm_hidden_size=56,
-                 last_hidden_size=21):
+                 dropout_rate=0.04892470394937945,
+                 lstm_hidden_size=120,
+                 last_hidden_size=16):
         super(NeuralNet, self).__init__()
 
         self.embedding = nn.Embedding(max_features, embed_size)
@@ -124,14 +124,15 @@ def seed_torch(seed=1234):
     torch.backends.cudnn.deterministic = True
 
 
-def search_threshold(y_true, y_pred):
-    args = np.argsort(y_pred)
+def threshold_search(y_true, y_proba):
+    args = np.argsort(y_proba)
     tp = y_true.sum()
     fs = (tp - np.cumsum(y_true[args[:-1]])) / np.arange(y_true.shape[0] + tp - 1, tp, -1)
     res_idx = np.argmax(fs)
-    best_th = (y_pred[args[res_idx]] + y_pred[args[res_idx + 1]]) / 2
+    best_th = (y_proba[args[res_idx]] + y_proba[args[res_idx + 1]]) / 2
     best_score = 2 * fs[res_idx]
-    return best_th, best_score
+    search_result = {'threshold': best_th, 'f1': best_score}
+    return search_result
 
 
 def sigmoid(x):
@@ -228,8 +229,6 @@ x_test_cuda = torch.tensor(x_test, dtype=torch.long).cuda()
 test = torch.utils.data.TensorDataset(x_test_cuda)
 test_loader = torch.utils.data.DataLoader(test, batch_size=batch_size, shuffle=False)
 
-best_ths = []
-
 for i, (train_idx, valid_idx) in enumerate(splits):
     x_train_fold = torch.tensor(x_train[train_idx], dtype=torch.long).cuda()
     y_train_fold = torch.tensor(y_train[train_idx, np.newaxis], dtype=torch.float32).cuda()
@@ -239,7 +238,7 @@ for i, (train_idx, valid_idx) in enumerate(splits):
     model = NeuralNet()
     model.cuda()
     loss_fn = torch.nn.BCEWithLogitsLoss(reduction='sum')
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.0005804986197443081)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.000873264229417701)
 
     train = torch.utils.data.TensorDataset(x_train_fold, y_train_fold)
     valid = torch.utils.data.TensorDataset(x_val_fold, y_val_fold)
@@ -269,22 +268,19 @@ for i, (train_idx, valid_idx) in enumerate(splits):
 
         avg_val_loss = 0.
         avg_f1 = 0.
-        avg_th = 0.
         for i, (x_batch, y_batch) in enumerate(valid_loader):
             y_pred = model(x_batch).detach()
             y_proba = sigmoid(y_pred.cpu().numpy())[:, 0]
-            best_th, f1 = search_threshold(y_batch.cpu().numpy(), y_proba)
-            avg_th += best_th / len(valid_loader)
-            avg_f1 += f1 / len(valid_loader)
+            search_result = threshold_search(y_batch.cpu().numpy(), y_proba)
+            avg_f1 += search_result['f1'] / len(valid_loader)
 
             avg_val_loss += loss_fn(y_pred, y_batch).item() / len(valid_loader)
             valid_preds_fold[i * batch_size:(i + 1) * batch_size] = y_proba
 
         elapsed_time = time.time() - start_time
-        print('Epoch {}/{} \t loss={:.4f} \t val_loss={:.4f} \t f1={:.4f} \t best_th={:.2f} \t time={:.2f}s'.format(
-            epoch + 1, n_epochs, avg_loss, avg_val_loss, avg_f1, avg_th, elapsed_time))
+        print('Epoch {}/{} \t loss={:.4f} \t val_loss={:.4f} \t f1={:.4f} \t time={:.2f}s'.format(
+            epoch + 1, n_epochs, avg_loss, avg_val_loss, avg_f1, elapsed_time))
 
-    best_ths.append(avg_th)
     for i, (x_batch,) in enumerate(test_loader):
         y_pred = model(x_batch).detach()
 
@@ -293,10 +289,8 @@ for i, (train_idx, valid_idx) in enumerate(splits):
     train_preds[valid_idx] = valid_preds_fold
     test_preds += test_preds_fold / len(splits)
 
-print("5fold best_threshold: {}".format(best_ths))
-
-best_th, f1 = search_threshold(y_train, train_preds)
-print("search result: {}, {}".format(best_th, f1))
+search_result = threshold_search(y_train, train_preds)
+print("search result: {}".format(search_result))
 submission = test_df[['qid']].copy()
-submission['prediction'] = test_preds > best_th
+submission['prediction'] = test_preds > search_result['threshold']
 submission.to_csv('submission.csv', index=False)
