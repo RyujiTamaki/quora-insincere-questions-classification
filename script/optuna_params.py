@@ -18,7 +18,7 @@ maxlen = 70
 embed_size = 300
 n_epochs = 4
 
-loss_fn = torch.nn.BCEWithLogitsLoss(reduction='sum')
+loss_fn = torch.nn.BCEWithLogitsLoss(reduction='mean')
 
 glove_embedding = joblib.load('../input/glove_embeddings.joblib')
 paragram_embedding = joblib.load('../input/paragram_embeddings.joblib')
@@ -200,7 +200,7 @@ def objective(trial):
         X_train,
         x_sif_train,
         y_train,
-        test_size=0.20,
+        test_size=0.10,
         stratify=y_train,
         random_state=39
     )
@@ -215,7 +215,7 @@ def objective(trial):
     train = torch.utils.data.TensorDataset(x_train_tensor, x_sif_train_tensor, y_train_tensor)
     test = torch.utils.data.TensorDataset(x_test_tensor, x_sif_test_tensor, y_test_tensor)
 
-    # batch_size = int(trial.suggest_categorical('batch_size', [64, 128, 256, 512, 1024]))
+    # batch_size = int(trial.suggest_categorical('batch_size', [256, 512, 1024]))
     batch_size = 512
 
     train_loader = torch.utils.data.DataLoader(train, batch_size=batch_size, shuffle=True)
@@ -245,12 +245,12 @@ def objective(trial):
         print('Epoch {}/{} \t loss={:.4f} \t val_loss={:.4f} \t f1={:.4f} \t auc={:.4f} \t time={:.2f}s'.format(
             step + 1, n_epochs, avg_loss, avg_val_loss, avg_f1, avg_auc, elapsed_time))
 
-    return min(val_losses)
+    return 1 - max(auc_scores)
 
 
 def main():
     seed_torch()
-    study = optuna.create_study(study_name='opt-loss-sif-emb', storage='sqlite:///quora.db', load_if_exists=True)
+    study = optuna.create_study(study_name='opt-acu-val-0.1-sif', storage='sqlite:///quora.db', load_if_exists=True)
     study.optimize(objective, n_trials=100)
 
     print('Number of finished trials: ', len(study.trials))
