@@ -66,7 +66,7 @@ class VATLoss(nn.Module):
 
     def forward(self, model, x):
         with torch.no_grad():
-            pred = F.softmax(model(x), dim=1)
+            pred = torch.sigmoid(model(x))
 
         # prepare random unit tensor
         d = torch.rand(x.shape).sub(0.5).to(x.device)
@@ -77,7 +77,7 @@ class VATLoss(nn.Module):
             for _ in range(self.ip):
                 d.requires_grad_()
                 pred_hat = model(x + self.xi * d)
-                logp_hat = F.log_softmax(pred_hat, dim=1)
+                logp_hat = torch.sigmoid(pred_hat)
                 adv_distance = F.kl_div(logp_hat, pred, reduction='batchmean')
                 adv_distance.backward()
                 d = _l2_normalize(d.grad)
@@ -86,7 +86,7 @@ class VATLoss(nn.Module):
             # calc LDS
             r_adv = d * self.eps
             pred_hat = model(x + r_adv)
-            logp_hat = F.log_softmax(pred_hat, dim=1)
+            logp_hat = torch.sigmoid(pred_hat)
             lds = F.kl_div(logp_hat, pred, reduction='batchmean')
 
         return lds
@@ -368,21 +368,28 @@ def train_model(model, x_train, y_train, x_val, y_val, validate=True):
                          gamma=0.99994)
 
     loss_fn = torch.nn.BCEWithLogitsLoss(reduction='mean').cuda()
+    vat_loss = VATLoss(xi=10.0, eps=1.0, ip=1)
     best_score = -np.inf
 
     for epoch in range(n_epochs):
         start_time = time.time()
         model.train()
         avg_loss = 0.
+        avg_cross_entropy = 0.
+        avg_lds = 0.
 
         for x_batch, y_batch in tqdm(train_loader, disable=True):
+            lds = vat_loss(model, x_batch)
             y_pred = model(x_batch)
             scheduler.batch_step()
-            loss = loss_fn(y_pred, y_batch)
+            cross_entropy = loss_fn(y_pred, y_batch)
+            loss = cross_entropy + lds
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             avg_loss += loss.item() / len(train_loader)
+            avg_cross_entropy += cross_entropy.item() / len(train_loader)
+            avg_lds += lds.item() / len(train_loader)
         model.eval()
         valid_preds = np.zeros((x_val_fold.size(0)))
 
@@ -397,8 +404,8 @@ def train_model(model, x_train, y_train, x_val, y_val, validate=True):
 
             val_f1, val_threshold = search_result['f1'], search_result['threshold']
             elapsed_time = time.time() - start_time
-            print('Epoch {}/{} \t loss={:.4f} \t val_loss={:.4f} \t val_f1={:.4f} best_t={:.2f} \t time={:.2f}s'.format(
-                epoch + 1, n_epochs, avg_loss, avg_val_loss, val_f1, val_threshold, elapsed_time))
+            print('Epoch {}/{} \t loss={:.4f} \t val_loss={:.4f} \t val_f1={:.4f} \t ce={:.2f} \t lds={:.2f} \t time={:.2f}s'.format(
+                epoch + 1, n_epochs, avg_loss, avg_val_loss, val_f1, avg_cross_entropy, avg_lds, elapsed_time))
         else:
             elapsed_time = time.time() - start_time
             print('Epoch {}/{} \t loss={:.4f} \t time={:.2f}s'.format(
@@ -455,7 +462,7 @@ x_test = test_df["question_text"].values
 x_test_local = local_test_df["question_text"].values
 
 tokenizer = Tokenizer(num_words=max_features)
-tokenizer.fit_on_texts(list(x_train) + list(x_test_local))
+tokenizer.fit_on_texts(list(x_train) + list(x_test_local) + list(x_test))
 x_train = tokenizer.texts_to_sequences(x_train)
 x_test = tokenizer.texts_to_sequences(x_test)
 x_test_local = tokenizer.texts_to_sequences(x_test_local)
