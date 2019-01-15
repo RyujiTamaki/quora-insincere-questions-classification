@@ -69,14 +69,14 @@ class VATLoss(nn.Module):
             pred = torch.sigmoid(model(x))
 
         # prepare random unit tensor
-        d = torch.rand(x.shape).sub(0.5).to(x.device)
+        d = torch.rand(torch.Size([x.size()[0], x.size()[1], 300])).sub(0.5).to(x.device)
         d = _l2_normalize(d)
 
         with _disable_tracking_bn_stats(model):
             # calc adversarial direction
             for _ in range(self.ip):
                 d.requires_grad_()
-                pred_hat = model(x + self.xi * d)
+                pred_hat = model(x, d=d)
                 logp_hat = torch.sigmoid(pred_hat)
                 adv_distance = F.kl_div(logp_hat, pred, reduction='batchmean')
                 adv_distance.backward()
@@ -85,7 +85,7 @@ class VATLoss(nn.Module):
 
             # calc LDS
             r_adv = d * self.eps
-            pred_hat = model(x + r_adv)
+            pred_hat = model(x, d=r_adv)
             logp_hat = torch.sigmoid(pred_hat)
             lds = F.kl_div(logp_hat, pred, reduction='batchmean')
 
@@ -251,8 +251,11 @@ class NeuralNet(nn.Module):
         self.dropout = nn.Dropout(dropout_rate)
         self.out = nn.Linear(last_hidden_size, 1)
 
-    def forward(self, x):
-        h_embedding = self.embedding(x)
+    def forward(self, x, d=None):
+        if d is None:
+            h_embedding = self.embedding(x)
+        else:
+            h_embedding = self.embedding(x) + d
         h_embedding = torch.squeeze(
             self.embedding_dropout(torch.unsqueeze(h_embedding, 0)))
 
