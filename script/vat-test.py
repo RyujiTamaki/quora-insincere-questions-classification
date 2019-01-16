@@ -64,9 +64,15 @@ class VATLoss(nn.Module):
         self.eps = eps
         self.ip = ip
 
+    def _kl_divergence_with_logits(self, q_logits, p_logits):
+        q = torch.sigmoid(q_logits)
+        kl = (-F.binary_cross_entropy_with_logits(input=q_logits, target=q) +
+            F.binary_cross_entropy_with_logits(input=p_logits, target=q))
+        return kl
+
     def forward(self, model, x):
         with torch.no_grad():
-            pred = torch.sigmoid(model(x))
+            logits = torch.sigmoid(model(x))
 
         # prepare random unit tensor
         d = torch.rand(torch.Size([x.size()[0], x.size()[1], 300])).sub(0.5).to(x.device)
@@ -76,18 +82,16 @@ class VATLoss(nn.Module):
             # calc adversarial direction
             for _ in range(self.ip):
                 d.requires_grad_()
-                pred_hat = model(x, d=d)
-                logp_hat = torch.sigmoid(pred_hat)
-                adv_distance = F.kl_div(logp_hat, pred, reduction='batchmean')
+                d_logits = torch.sigmoid(model(x, d=self.xi * d))
+                adv_distance = self._kl_divergence_with_logits(d_logits, logits)
                 adv_distance.backward()
                 d = _l2_normalize(d.grad)
                 model.zero_grad()
 
             # calc LDS
             r_adv = d * self.eps
-            pred_hat = model(x, d=r_adv)
-            logp_hat = torch.sigmoid(pred_hat)
-            lds = F.kl_div(logp_hat, pred, reduction='batchmean')
+            vadv_logits = torch.sigmoid(model(x, d=r_adv))
+            lds = self._kl_divergence_with_logits(vadv_logits, logits)
 
         return lds
 
@@ -407,8 +411,8 @@ def train_model(model, x_train, y_train, x_val, y_val, validate=True):
 
             val_f1, val_threshold = search_result['f1'], search_result['threshold']
             elapsed_time = time.time() - start_time
-            print('Epoch {}/{} \t loss={:.4f} \t val_loss={:.4f} \t val_f1={:.4f} \t ce={:.2f} \t lds={:.2f} \t time={:.2f}s'.format(
-                epoch + 1, n_epochs, avg_loss, avg_val_loss, val_f1, avg_cross_entropy, avg_lds, elapsed_time))
+            print('Epoch {}/{} \t loss={:.4f} \t val_loss={:.4f} \t val_f1={:.4f} \t all_loss={:.4f} \t lds={:.4f} \t time={:.2f}s'.format(
+                epoch + 1, n_epochs, avg_cross_entropy, avg_val_loss, val_f1, avg_loss, avg_lds, elapsed_time))
         else:
             elapsed_time = time.time() - start_time
             print('Epoch {}/{} \t loss={:.4f} \t time={:.2f}s'.format(
